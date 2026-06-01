@@ -21,6 +21,7 @@ dependencies = [
     "fonttools>=4.62.1",
     "brotli>=1.2.0",
     "openai>=2.33.0",
+    "pymupdf>=1.27.2.3",
 ]
 
 
