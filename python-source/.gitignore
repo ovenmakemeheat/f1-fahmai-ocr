@@ -1,0 +1,37 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Linters
+.ruff_cache/
+
+# Data & large files
+data/
+cache/
+*.csv
+*.parquet
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.bin
+*.npz
+*.npy
+
+# Submissions
+submission*.csv
+submissions/

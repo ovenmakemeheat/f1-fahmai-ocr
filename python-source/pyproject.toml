@@ -1,0 +1,61 @@
+[project]
+name = "spai-asm1"
+version = "0.1.0"
+description = "Super AI Assignment 1: Data Analysis and Visualization"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "matplotlib>=3.10.8",
+    "pandas",
+    "matplotlib",
+    "numpy>=2.4.1",
+    "pandas>=2.3.3",
+    "seaborn>=0.13.2",
+    "plotly>=5.15.0",
+    # "imbalanced-learn>=0.14.1",
+    # "xgboost>=3.2.0",
+    # "scikit-learn>=1.8.0",
+    # "optuna>=4.7.0",
+    # "lightgbm>=4.6.0",
+    "fonttools>=4.62.1",
+    "brotli>=1.2.0",
+    "openai>=2.33.0",
+]
+
+
+[tool.uv]
+default-groups = ["dev", "notebook"]
+
+[dependency-groups]
+dev = ["ruff>=0.14.13", "ruff-lsp>=0.0.62"]
+notebook = [
+    "ipykernel",
+    "ipywidgets",
+    "jupyter>=1.1.1",
+    "jupyterlab>=4.5.2",
+    "nbconvert>=7.16.6",
+    "nbqa>=1.9.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["E402"] # Allow imports not at top of file in notebooks
+
+[tool.nbqa]
+addopts = "--ruff"
