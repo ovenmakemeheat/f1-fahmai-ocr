@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ocr_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ocr_db}
+      POSTGRES_USER: ${POSTGRES_USER:-ocr_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ocr_user} -d ${POSTGRES_DB:-ocr_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: ocr_api
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${PER_ARTIFACT_DIR:-./per_artifact}:/data/fahmai/per_artifact:ro
+    command: >
+      uvicorn app.main:app
+        --host 0.0.0.0
+        --port 8080
+        --workers ${API_WORKERS:-4}
+
+volumes:
+  pgdata:
