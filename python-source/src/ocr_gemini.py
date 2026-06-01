@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -136,6 +137,24 @@ class GeminiClient:
         )
         return (response.text or "").strip()
 
+    async def generate_json_from_image_async(self, prompt: str, image_path: Path) -> str:
+        suffix = image_path.suffix.lower()
+        mime_type = SUPPORTED_MIME_TYPES.get(suffix)
+        if not mime_type:
+            raise ValueError(f"Unsupported image type for Gemini request: {image_path}")
+        response = await self._client.aio.models.generate_content(
+            model=self.config.model,
+            contents=[
+                prompt,
+                self._types.Part.from_bytes(data=image_path.read_bytes(), mime_type=mime_type),
+            ],
+            config=self._types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+            ),
+        )
+        return (response.text or "").strip()
+
 
 def _redact_secret_like_values(message: str) -> str:
     message = re.sub(r"ya29\.[A-Za-z0-9._-]+", "[REDACTED_OAUTH_TOKEN]", message)
@@ -173,6 +192,36 @@ def call_with_retries(
                 f"{sleep_seconds:.1f}s: {error_summary}"
             )
             time.sleep(sleep_seconds)
+    final_summary = describe_error(last_error) if last_error else "unknown error"
+    raise RuntimeError(
+        f"Gemini request failed for {image_path} after {max_retries + 1} attempts: "
+        f"{final_summary}"
+    ) from last_error
+
+
+async def call_with_retries_async(
+    client: GeminiClient,
+    prompt: str,
+    image_path: Path,
+    max_retries: int = 3,
+    base_sleep_seconds: float = 2.0,
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await client.generate_json_from_image_async(prompt, image_path)
+        except Exception as exc:  # noqa: BLE001 - preserve retry context for CLI
+            last_error = exc
+            error_summary = describe_error(exc)
+            if attempt >= max_retries:
+                break
+            sleep_seconds = base_sleep_seconds * (2**attempt)
+            tqdm.write(
+                f"Gemini request failed for {image_path.name} "
+                f"(attempt {attempt + 1}/{max_retries + 1}); retrying in "
+                f"{sleep_seconds:.1f}s: {error_summary}"
+            )
+            await asyncio.sleep(sleep_seconds)
     final_summary = describe_error(last_error) if last_error else "unknown error"
     raise RuntimeError(
         f"Gemini request failed for {image_path} after {max_retries + 1} attempts: "

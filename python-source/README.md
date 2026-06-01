@@ -129,7 +129,7 @@ Useful options:
 --allow-missing
 ```
 
-`extract` runs artifacts in parallel. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck.
+`extract` runs artifacts concurrently with async Vertex calls. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck. Finished artifacts are tracked under `work/ocr/finished/` and skipped on reruns unless `--force` is used.
 
 Valid artifact types are defined in `src/ocr_config.py`.
 
