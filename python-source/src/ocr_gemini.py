@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -169,6 +170,13 @@ def describe_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {message}"
 
 
+def retry_sleep_seconds(exc: Exception, attempt: int, base_sleep_seconds: float) -> float:
+    summary = describe_error(exc)
+    if "429" in summary or "RESOURCE_EXHAUSTED" in summary:
+        return min(60.0, 10.0 * (2**attempt)) + random.uniform(0.0, 3.0)
+    return base_sleep_seconds * (2**attempt) + random.uniform(0.0, 0.5)
+
+
 def call_with_retries(
     client: GeminiClient,
     prompt: str,
@@ -185,7 +193,7 @@ def call_with_retries(
             error_summary = describe_error(exc)
             if attempt >= max_retries:
                 break
-            sleep_seconds = base_sleep_seconds * (2**attempt)
+            sleep_seconds = retry_sleep_seconds(exc, attempt, base_sleep_seconds)
             tqdm.write(
                 f"Gemini request failed for {image_path.name} "
                 f"(attempt {attempt + 1}/{max_retries + 1}); retrying in "
@@ -215,7 +223,7 @@ async def call_with_retries_async(
             error_summary = describe_error(exc)
             if attempt >= max_retries:
                 break
-            sleep_seconds = base_sleep_seconds * (2**attempt)
+            sleep_seconds = retry_sleep_seconds(exc, attempt, base_sleep_seconds)
             tqdm.write(
                 f"Gemini request failed for {image_path.name} "
                 f"(attempt {attempt + 1}/{max_retries + 1}); retrying in "

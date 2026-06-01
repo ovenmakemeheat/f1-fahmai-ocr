@@ -31,8 +31,8 @@ GEMINI_API_KEY=
 GOOGLE_OAUTH_ACCESS_TOKEN=
 GOOGLE_APPLICATION_CREDENTIALS=
 OCR_OUTPUT_DIR=work/ocr
-OCR_MAX_RETRIES=3
-OCR_WORKERS=16
+OCR_MAX_RETRIES=6
+OCR_WORKERS=2
 GEMINI_TIMEOUT_SECONDS=120
 ```
 
@@ -100,7 +100,7 @@ Direct command wrappers pass extra arguments through:
 scripts\ocr_manifest.bat --limit 10
 scripts\ocr_prepare_images.bat --limit 10 --force
 scripts\ocr_extract.bat --limit 10 --max-retries 5
-scripts\ocr_extract.bat --workers 16
+scripts\ocr_extract.bat --workers 2
 scripts\ocr_validate.bat --work-dir work\ocr_test
 scripts\ocr_submit.bat --allow-missing
 ```
@@ -123,13 +123,13 @@ Useful options:
 --type receipt
 --limit 20
 --force
---workers 16
+--workers 2
 --work-dir work\ocr_test
 --image-manifest work\ocr_test\image_manifest.jsonl
 --allow-missing
 ```
 
-`extract` runs artifacts concurrently with async Vertex calls. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck. Finished artifacts are tracked under `work/ocr/finished/` and skipped on reruns unless `--force` is used.
+`extract` runs image pages concurrently with async Vertex calls. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck. Finished artifacts are tracked under `work/ocr/finished/` and skipped on reruns unless `--force` is used.
 
 Valid artifact types are defined in `src/ocr_config.py`.
 

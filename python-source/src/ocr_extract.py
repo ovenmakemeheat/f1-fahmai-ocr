@@ -125,41 +125,37 @@ class OcrExtractor:
         self,
         artifact_id: str,
         records: list[ImagePageRecord],
+        request_semaphore: asyncio.Semaphore,
+        page_progress: tqdm | None = None,
     ) -> list[str]:
-        page_predictions: list[dict[str, Any]] = []
-        raw_payload: list[dict[str, Any]] = []
-        for record in records:
-            prompt = build_prompt(record.to_json())
-            try:
-                raw_text = await call_with_retries_async(
-                    self.client,
-                    prompt,
-                    record.image_path,
-                    max_retries=self.max_retries,
-                )
-            except RuntimeError as exc:
-                raise RuntimeError(
-                    f"OCR failed for artifact={artifact_id}, page={record.page_index}, "
-                    f"image={record.image_index}, path={portable_path(record.image_path)}: {exc}"
-                ) from exc
-            raw_payload.append(
-                {
-                    "page_index": record.page_index,
-                    "image_index": record.image_index,
-                    "image_path": portable_path(record.image_path),
-                    "response": raw_text,
-                }
+        page_results = await asyncio.gather(
+            *(
+                self.extract_page_async(artifact_id, record, request_semaphore, page_progress)
+                for record in records
             )
-            self._write_json(self.raw_dir / f"{artifact_id}.json", raw_payload)
+        )
+        page_results.sort(key=lambda row: (row["page_index"], row["image_index"]))
+        raw_payload = [
+            {
+                "page_index": row["page_index"],
+                "image_index": row["image_index"],
+                "image_path": row["image_path"],
+                "response": row["response"],
+            }
+            for row in page_results
+        ]
+        self._write_json(self.raw_dir / f"{artifact_id}.json", raw_payload)
+
+        page_predictions: list[dict[str, Any]] = []
+        for row in page_results:
             try:
-                page_predictions.append(parse_json_object(raw_text))
+                page_predictions.append(parse_json_object(str(row["response"])))
             except ValueError as exc:
                 raise ValueError(
-                    f"Could not parse JSON for artifact={artifact_id}, page={record.page_index}, "
-                    f"image={record.image_index}. Raw response saved to "
+                    f"Could not parse JSON for artifact={artifact_id}, page={row['page_index']}, "
+                    f"image={row['image_index']}. Raw response saved to "
                     f"{self.raw_dir / f'{artifact_id}.json'}"
                 ) from exc
-
         merged = merge_page_predictions(page_predictions)
         errors = validate_prediction(merged)
         self._write_json(self.raw_dir / f"{artifact_id}.json", raw_payload)
@@ -170,6 +166,36 @@ class OcrExtractor:
         )
         self.write_finished_marker(artifact_id, records, errors)
         return errors
+
+    async def extract_page_async(
+        self,
+        artifact_id: str,
+        record: ImagePageRecord,
+        request_semaphore: asyncio.Semaphore,
+        page_progress: tqdm | None = None,
+    ) -> dict[str, Any]:
+        prompt = build_prompt(record.to_json())
+        try:
+            async with request_semaphore:
+                raw_text = await call_with_retries_async(
+                    self.client,
+                    prompt,
+                    record.image_path,
+                    max_retries=self.max_retries,
+                )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"OCR failed for artifact={artifact_id}, page={record.page_index}, "
+                f"image={record.image_index}, path={portable_path(record.image_path)}: {exc}"
+            ) from exc
+        if page_progress is not None:
+            page_progress.update(1)
+        return {
+            "page_index": record.page_index,
+            "image_index": record.image_index,
+            "image_path": portable_path(record.image_path),
+            "response": raw_text,
+        }
 
     def write_finished_marker(
         self,
@@ -278,41 +304,82 @@ async def _extract_async(
     workers: int,
 ) -> int:
     processed = 0
-    semaphore = asyncio.Semaphore(workers)
+    request_semaphore = asyncio.Semaphore(workers)
+    artifact_queue: asyncio.Queue[tuple[str, list[ImagePageRecord]] | None] = asyncio.Queue()
+    result_queue: asyncio.Queue[tuple[str, list[str]] | BaseException] = asyncio.Queue()
     extractor = OcrExtractor(
         client=GeminiClient(),
         work_dir=work_dir,
         max_retries=max_retries,
         force=force,
     )
-    tasks = [
-        asyncio.create_task(_extract_artifact_task(semaphore, extractor, artifact_id, records))
-        for artifact_id, records in artifact_items
+    for item in artifact_items:
+        artifact_queue.put_nowait(item)
+    for _ in range(workers):
+        artifact_queue.put_nowait(None)
+
+    total_pages = sum(len(records) for _, records in artifact_items)
+    page_progress = tqdm(total=total_pages, desc=f"pages x{workers}", unit="page")
+    worker_tasks = [
+        asyncio.create_task(
+            _extract_artifact_worker_loop(
+                artifact_queue,
+                result_queue,
+                request_semaphore,
+                extractor,
+                page_progress,
+            )
+        )
+        for _ in range(workers)
     ]
-    progress = tqdm(
-        asyncio.as_completed(tasks),
-        total=len(tasks),
-        desc=f"extract async x{workers}",
+    artifact_progress = tqdm(
+        total=len(artifact_items),
+        desc=f"artifacts x{workers}",
         unit="artifact",
     )
-    for future in progress:
-        artifact_id, errors = await future
-        processed += 1
-        progress.set_postfix_str(artifact_id, refresh=False)
-        status = "valid" if not errors else f"errors={len(errors)}"
-        progress.write(f"{artifact_id}: {status}")
+    try:
+        while processed < len(artifact_items):
+            result = await result_queue.get()
+            if isinstance(result, BaseException):
+                for task in worker_tasks:
+                    task.cancel()
+                raise result
+            artifact_id, errors = result
+            processed += 1
+            artifact_progress.update(1)
+            artifact_progress.set_postfix_str(artifact_id, refresh=False)
+            status = "valid" if not errors else f"errors={len(errors)}"
+            artifact_progress.write(f"{artifact_id}: {status}")
+    finally:
+        artifact_progress.close()
+        page_progress.close()
+        await asyncio.gather(*worker_tasks, return_exceptions=True)
     return processed
 
 
-async def _extract_artifact_task(
-    semaphore: asyncio.Semaphore,
+async def _extract_artifact_worker_loop(
+    artifact_queue: asyncio.Queue[tuple[str, list[ImagePageRecord]] | None],
+    result_queue: asyncio.Queue[tuple[str, list[str]] | BaseException],
+    request_semaphore: asyncio.Semaphore,
     extractor: OcrExtractor,
-    artifact_id: str,
-    records: list[ImagePageRecord],
-) -> tuple[str, list[str]]:
-    async with semaphore:
-        errors = await extractor.extract_artifact_async(artifact_id, records)
-    return artifact_id, errors
+    page_progress: tqdm,
+) -> None:
+    while True:
+        item = await artifact_queue.get()
+        if item is None:
+            return
+        artifact_id, records = item
+        try:
+            errors = await extractor.extract_artifact_async(
+                artifact_id,
+                records,
+                request_semaphore,
+                page_progress,
+            )
+        except BaseException as exc:
+            await result_queue.put(exc)
+            return
+        await result_queue.put((artifact_id, errors))
 
 
 def is_artifact_finished(work_dir: Path, artifact_id: str) -> bool:
