@@ -12,17 +12,18 @@ def extract_json_text(text: str) -> str:
     fence_match = FENCE_RE.search(stripped)
     if fence_match:
         stripped = fence_match.group(1).strip()
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start == -1 or end == -1 or end < start:
+    starts = [index for index in (stripped.find("{"), stripped.find("[")) if index != -1]
+    if not starts:
         raise ValueError("No JSON object found in model response")
-    return stripped[start : end + 1]
+    return stripped[min(starts) :]
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
     json_text = extract_json_text(text)
-    value = json.loads(json_text)
+    decoder = json.JSONDecoder()
+    value, _ = decoder.raw_decode(json_text)
+    if isinstance(value, list):
+        return {"items": value}
     if not isinstance(value, dict):
-        raise ValueError("Model response JSON must be an object")
+        raise ValueError(f"Model response JSON must be an object, got {type(value).__name__}")
     return value
-

@@ -25,6 +25,7 @@ class GeminiConfig:
     project: str | None
     location: str
     access_token: str | None
+    auth_mode: str
     timeout_seconds: int = 120
 
     @classmethod
@@ -41,6 +42,7 @@ class GeminiConfig:
             project=os.getenv("GOOGLE_CLOUD_PROJECT"),
             location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
             access_token=access_token,
+            auth_mode=os.getenv("GOOGLE_GENAI_AUTH", "adc").lower(),
             timeout_seconds=int(os.getenv("GEMINI_TIMEOUT_SECONDS", "120")),
         )
 
@@ -54,6 +56,7 @@ class GeminiClient:
                 "with Application Default Credentials, or set GEMINI_API_KEY."
             )
         try:
+            import google.auth
             from google import genai
             from google.genai import types
             from google.oauth2.credentials import Credentials
@@ -64,8 +67,25 @@ class GeminiClient:
         http_options = types.HttpOptions(timeout=self.config.timeout_seconds * 1000)
         if self.config.project:
             credentials = None
-            if self.config.access_token:
+            if self.config.auth_mode == "token":
+                if not self.config.access_token:
+                    raise RuntimeError(
+                        "GOOGLE_GENAI_AUTH=token requires GOOGLE_OAUTH_ACCESS_TOKEN."
+                    )
                 credentials = Credentials(token=self.config.access_token)
+            else:
+                try:
+                    credentials, _ = google.auth.default(
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        "Google Application Default Credentials were not found. Run "
+                        "`gcloud auth application-default login` or set "
+                        "GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON file. "
+                        "For explicit bearer-token mode, set GOOGLE_GENAI_AUTH=token, "
+                        "but Vertex may reject unsupported token types."
+                    ) from exc
             self._client = genai.Client(
                 enterprise=True,
                 credentials=credentials,

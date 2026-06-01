@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any
 
 
+def portable_path(path: Path) -> str:
+    return path.as_posix()
+
+
 @dataclass(frozen=True)
 class PageRecord:
     artifact_id: str
@@ -78,8 +82,8 @@ class ImagePageRecord:
             "page_index": self.page_index,
             "image_index": self.image_index,
             "page_kind": self.page_kind,
-            "source_path": str(self.source_path),
-            "image_path": str(self.image_path),
+            "source_path": portable_path(self.source_path),
+            "image_path": portable_path(self.image_path),
             "width": self.width,
             "height": self.height,
             "sha256": self.sha256,
@@ -88,4 +92,3 @@ class ImagePageRecord:
             "visible_fields": list(self.visible_fields),
             "expected_visible_fields": list(self.expected_visible_fields),
         }
-

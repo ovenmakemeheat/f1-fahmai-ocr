@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from .ocr_config import DEFAULT_OCR_DATA_DIR, DEFAULT_SAMPLE_PATH
 from .ocr_jsonl import write_jsonl
-from .ocr_records import ArtifactRecord, PageRecord
+from .ocr_records import ArtifactRecord, PageRecord, portable_path
 
 
 def load_sample_artifact_ids(sample_path: Path = DEFAULT_SAMPLE_PATH) -> list[str]:
@@ -107,7 +107,7 @@ def manifest_to_jsonl(records: list[ArtifactRecord], output_path: Path) -> None:
             "template_version": artifact.template_version,
             "page_index": page.page_index,
             "page_kind": page.page_kind,
-            "source_path": str(page.source_path),
+            "source_path": portable_path(page.source_path),
             "source_fact_table": page.source_fact_table,
             "source_row_ids": list(page.source_row_ids),
             "visible_fields": list(page.visible_fields),

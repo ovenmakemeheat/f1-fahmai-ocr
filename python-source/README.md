@@ -26,11 +26,13 @@ Copy `.env.example` to `.env` and fill in the Vertex settings:
 GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 GOOGLE_CLOUD_LOCATION=global
 GEMINI_MODEL=gemini-3.5-flash
+GOOGLE_GENAI_AUTH=adc
 GEMINI_API_KEY=
 GOOGLE_OAUTH_ACCESS_TOKEN=
 GOOGLE_APPLICATION_CREDENTIALS=
 OCR_OUTPUT_DIR=work/ocr
 OCR_MAX_RETRIES=3
+OCR_WORKERS=16
 GEMINI_TIMEOUT_SECONDS=120
 ```
 
@@ -38,11 +40,12 @@ For Vertex auth with `google-genai`, use Application Default Credentials:
 
 ```bat
 gcloud auth application-default login
+gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 ```
 
 If using a service account JSON file, set `GOOGLE_APPLICATION_CREDENTIALS` to its path. `.env` is ignored by git.
 
-For a short-lived bearer token instead, set `GOOGLE_OAUTH_ACCESS_TOKEN` from:
+For a short-lived bearer token instead, set `GOOGLE_GENAI_AUTH=token` and `GOOGLE_OAUTH_ACCESS_TOKEN` from:
 
 ```bat
 gcloud auth application-default print-access-token
@@ -97,6 +100,7 @@ Direct command wrappers pass extra arguments through:
 scripts\ocr_manifest.bat --limit 10
 scripts\ocr_prepare_images.bat --limit 10 --force
 scripts\ocr_extract.bat --limit 10 --max-retries 5
+scripts\ocr_extract.bat --workers 16
 scripts\ocr_validate.bat --work-dir work\ocr_test
 scripts\ocr_submit.bat --allow-missing
 ```
@@ -119,10 +123,13 @@ Useful options:
 --type receipt
 --limit 20
 --force
+--workers 16
 --work-dir work\ocr_test
 --image-manifest work\ocr_test\image_manifest.jsonl
 --allow-missing
 ```
+
+`extract` runs artifacts in parallel. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck.
 
 Valid artifact types are defined in `src/ocr_config.py`.
 
