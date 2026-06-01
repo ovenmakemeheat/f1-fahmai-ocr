@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import base64
-import json
 import os
+import re
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from tqdm import tqdm
+
+from .ocr_config import load_dotenv
 
 SUPPORTED_MIME_TYPES = {
     ".png": "image/png",
@@ -29,12 +29,18 @@ class GeminiConfig:
 
     @classmethod
     def from_env(cls) -> GeminiConfig:
+        load_dotenv()
+        api_key = os.getenv("GEMINI_API_KEY")
+        access_token = os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN")
+        if api_key and api_key.startswith("ya29."):
+            access_token = access_token or api_key
+            api_key = None
         return cls(
             model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
-            api_key=os.getenv("GEMINI_API_KEY"),
+            api_key=api_key,
             project=os.getenv("GOOGLE_CLOUD_PROJECT"),
-            location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
-            access_token=os.getenv("GOOGLE_OAUTH_ACCESS_TOKEN"),
+            location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
+            access_token=access_token,
             timeout_seconds=int(os.getenv("GEMINI_TIMEOUT_SECONDS", "120")),
         )
 
@@ -42,14 +48,47 @@ class GeminiConfig:
 class GeminiClient:
     def __init__(self, config: GeminiConfig | None = None) -> None:
         self.config = config or GeminiConfig.from_env()
-        if not self.config.api_key and not (self.config.project and self.config.access_token):
+        if not self.config.api_key and not self.config.project:
             raise RuntimeError(
-                "Gemini auth is not configured. Set GEMINI_API_KEY, or set "
-                "GOOGLE_CLOUD_PROJECT and GOOGLE_OAUTH_ACCESS_TOKEN for Vertex REST."
+                "Gemini auth is not configured. Set GOOGLE_CLOUD_PROJECT for Vertex AI "
+                "with Application Default Credentials, or set GEMINI_API_KEY."
             )
+        try:
+            from google import genai
+            from google.genai import types
+            from google.oauth2.credentials import Credentials
+        except ImportError as exc:
+            raise RuntimeError("google-genai is not installed. Run `uv sync`.") from exc
+        self._genai = genai
+        self._types = types
+        http_options = types.HttpOptions(timeout=self.config.timeout_seconds * 1000)
+        if self.config.project:
+            credentials = None
+            if self.config.access_token:
+                credentials = Credentials(token=self.config.access_token)
+            self._client = genai.Client(
+                enterprise=True,
+                credentials=credentials,
+                project=self.config.project,
+                location=self.config.location,
+                http_options=http_options,
+            )
+        else:
+            self._client = genai.Client(api_key=self.config.api_key, http_options=http_options)
 
     def _endpoint_and_headers(self) -> tuple[str, dict[str, str]]:
+        """Kept for lightweight diagnostics; generation uses google-genai."""
         model = self.config.model
+        if self.config.project:
+            host = "aiplatform.googleapis.com"
+            if self.config.location != "global":
+                host = f"{self.config.location}-aiplatform.googleapis.com"
+            endpoint = (
+                f"https://{host}/v1/projects/{self.config.project}/"
+                f"locations/{self.config.location}/publishers/google/models/{model}:generateContent"
+            )
+            return endpoint, {"Content-Type": "application/json"}
+
         if self.config.api_key:
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -57,56 +96,38 @@ class GeminiClient:
             )
             return endpoint, {"Content-Type": "application/json"}
 
-        endpoint = (
-            f"https://{self.config.location}-aiplatform.googleapis.com/v1/"
-            f"projects/{self.config.project}/locations/{self.config.location}/"
-            f"publishers/google/models/{model}:generateContent"
-        )
-        return endpoint, {
-            "Authorization": f"Bearer {self.config.access_token}",
-            "Content-Type": "application/json",
-        }
+        raise RuntimeError("Gemini auth is not configured.")
 
     def generate_json_from_image(self, prompt: str, image_path: Path) -> str:
         suffix = image_path.suffix.lower()
         mime_type = SUPPORTED_MIME_TYPES.get(suffix)
         if not mime_type:
             raise ValueError(f"Unsupported image type for Gemini request: {image_path}")
-        image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
-                        {"inlineData": {"mimeType": mime_type, "data": image_b64}},
-                    ],
-                }
+        response = self._client.models.generate_content(
+            model=self.config.model,
+            contents=[
+                prompt,
+                self._types.Part.from_bytes(data=image_path.read_bytes(), mime_type=mime_type),
             ],
-            "generationConfig": {
-                "temperature": 0,
-                "responseMimeType": "application/json",
-            },
-        }
-        return self._post_generate_content(payload)
+            config=self._types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+            ),
+        )
+        return (response.text or "").strip()
 
-    def _post_generate_content(self, payload: dict[str, Any]) -> str:
-        endpoint, headers = self._endpoint_and_headers()
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
-                response_body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Gemini HTTP {exc.code}: {detail[:1000]}") from exc
-        value = json.loads(response_body)
-        try:
-            parts = value["candidates"][0]["content"]["parts"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError(f"Unexpected Gemini response shape: {response_body[:1000]}") from exc
-        texts = [part.get("text", "") for part in parts if isinstance(part, dict)]
-        return "\n".join(texts).strip()
+
+def _redact_secret_like_values(message: str) -> str:
+    message = re.sub(r"ya29\.[A-Za-z0-9._-]+", "[REDACTED_OAUTH_TOKEN]", message)
+    message = re.sub(r"AIza[0-9A-Za-z_-]+", "[REDACTED_API_KEY]", message)
+    return message
+
+
+def describe_error(exc: Exception) -> str:
+    message = _redact_secret_like_values(str(exc))
+    if not message:
+        message = repr(exc)
+    return f"{type(exc).__name__}: {message}"
 
 
 def call_with_retries(
@@ -122,7 +143,18 @@ def call_with_retries(
             return client.generate_json_from_image(prompt, image_path)
         except Exception as exc:  # noqa: BLE001 - preserve retry context for CLI
             last_error = exc
+            error_summary = describe_error(exc)
             if attempt >= max_retries:
                 break
-            time.sleep(base_sleep_seconds * (2**attempt))
-    raise RuntimeError(f"Gemini request failed after {max_retries + 1} attempts") from last_error
+            sleep_seconds = base_sleep_seconds * (2**attempt)
+            tqdm.write(
+                f"Gemini request failed for {image_path.name} "
+                f"(attempt {attempt + 1}/{max_retries + 1}); retrying in "
+                f"{sleep_seconds:.1f}s: {error_summary}"
+            )
+            time.sleep(sleep_seconds)
+    final_summary = describe_error(last_error) if last_error else "unknown error"
+    raise RuntimeError(
+        f"Gemini request failed for {image_path} after {max_retries + 1} attempts: "
+        f"{final_summary}"
+    ) from last_error

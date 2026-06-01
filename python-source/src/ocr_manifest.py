@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tqdm import tqdm
+
 from .ocr_config import DEFAULT_OCR_DATA_DIR, DEFAULT_SAMPLE_PATH
 from .ocr_jsonl import write_jsonl
 from .ocr_records import ArtifactRecord, PageRecord
@@ -47,7 +49,10 @@ def load_artifact_manifest(
     sidecars = _sidecar_paths(data_dir)
     records: list[ArtifactRecord] = []
 
-    for artifact_id in artifact_ids:
+    scan_ids = artifact_ids
+    if limit is not None and artifact_type is None:
+        scan_ids = artifact_ids[:limit]
+    for artifact_id in tqdm(scan_ids, desc="manifest", unit="artifact"):
         if artifact_id not in sidecars:
             raise FileNotFoundError(f"No sidecar JSON found for artifact_id={artifact_id}")
         detected_type, sidecar_path = sidecars[artifact_id]
@@ -88,7 +93,7 @@ def load_artifact_manifest(
                 expected_visible_fields=tuple(visible_field_order),
             )
         )
-        if limit is not None and len(records) >= limit:
+        if artifact_type is not None and limit is not None and len(records) >= limit:
             break
     return records
 

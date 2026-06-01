@@ -1,0 +1,8 @@
+[
+  {
+    "page_index": 0,
+    "image_index": 0,
+    "image_path": "work\\ocr_test\\images\\warranty_form\\WC-SKU-MASS-046-202405-10011040\\000__page.png",
+    "response": "{\n  \"claim_id\": \"WC-2567-05-10011040\",\n  \"business_event_date\": \"10/05/2567\",\n  \"customer_id\": \"CUST-L3-011040\",\n  \"sku_id\": \"SKU-MASS-046\",\n  \"claim_reason\": \"defect\",\n  \"claim_amount_thb\": \"\",\n  \"routing_destination\": \"fahmai_cs\",\n  \"resolution_type\": \"pending\"\n}"
+  }
+]

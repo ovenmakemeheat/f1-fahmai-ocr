@@ -22,6 +22,8 @@ dependencies = [
     "brotli>=1.2.0",
     "openai>=2.33.0",
     "pymupdf>=1.27.2.3",
+    "google-genai>=1.0.0",
+    "tqdm>=4.67.1",
 ]
 
 

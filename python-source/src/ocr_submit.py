@@ -5,12 +5,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tqdm import tqdm
+
 from .ocr_manifest import DEFAULT_SAMPLE_PATH
 
 
 def load_parsed_predictions(parsed_dir: Path) -> dict[str, dict[str, Any]]:
     predictions: dict[str, dict[str, Any]] = {}
-    for path in sorted(parsed_dir.glob("*.json")):
+    paths = sorted(parsed_dir.glob("*.json"))
+    for path in tqdm(paths, desc="load parsed", unit="file"):
         with path.open("r", encoding="utf-8") as file:
             value = json.load(file)
         if not isinstance(value, dict):
@@ -33,7 +36,7 @@ def write_submission(
     with output_path.open("w", encoding="utf-8", newline="") as destination:
         writer = csv.DictWriter(destination, fieldnames=["artifact_id", "pred_json"])
         writer.writeheader()
-        for row in rows:
+        for row in tqdm(rows, desc="write submission", unit="row"):
             artifact_id = row["artifact_id"]
             prediction = predictions.get(artifact_id)
             if prediction is None:
@@ -43,4 +46,3 @@ def write_submission(
             else:
                 pred_json = json.dumps(prediction, ensure_ascii=False, separators=(",", ":"))
             writer.writerow({"artifact_id": artifact_id, "pred_json": pred_json})
-

@@ -1,0 +1,8 @@
+[
+  {
+    "page_index": 0,
+    "image_index": 0,
+    "image_path": "work\\ocr_test\\images\\vendor_invoice\\VI-V-013-INV-2567-226313\\000__page.png",
+    "response": "{\n  \"payment_id\": \"BT-202402-340727329532\",\n  \"vendor_id\": \"V-013\",\n  \"vendor_invoice_id\": \"V-013-INV-2567-226313\",\n  \"invoice_period_start\": \"01/01/2567\",\n  \"invoice_period_end\": \"31/01/2567\",\n  \"paid_amount_thb\": \"12,500.00\",\n  \"business_event_date\": \"31/01/2567\"\n}"
+  }
+]

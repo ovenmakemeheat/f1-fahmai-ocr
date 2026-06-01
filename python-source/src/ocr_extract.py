@@ -5,6 +5,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from tqdm import tqdm
+
 from .ocr_gemini import GeminiClient, call_with_retries
 from .ocr_jsonl import read_jsonl
 from .ocr_parse import parse_json_object
@@ -66,12 +68,18 @@ class OcrExtractor:
         raw_payload: list[dict[str, Any]] = []
         for record in records:
             prompt = build_prompt(record.to_json())
-            raw_text = call_with_retries(
-                self.client,
-                prompt,
-                record.image_path,
-                max_retries=self.max_retries,
-            )
+            try:
+                raw_text = call_with_retries(
+                    self.client,
+                    prompt,
+                    record.image_path,
+                    max_retries=self.max_retries,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"OCR failed for artifact={artifact_id}, page={record.page_index}, "
+                    f"image={record.image_index}, path={record.image_path}: {exc}"
+                ) from exc
             page_predictions.append(parse_json_object(raw_text))
             raw_payload.append(
                 {
@@ -118,14 +126,19 @@ def extract_from_manifest(
     )
 
     processed = 0
-    for artifact_id, records in grouped.items():
+    artifact_items = list(grouped.items())
+    progress = tqdm(artifact_items, desc="extract", unit="artifact")
+    for artifact_id, records in progress:
         if extractor.should_skip(artifact_id):
+            progress.set_postfix_str(f"skip {artifact_id}", refresh=False)
             continue
         if limit is not None and processed >= limit:
             break
+        progress.set_postfix_str(artifact_id, refresh=False)
         errors = extractor.extract_artifact(artifact_id, records)
         processed += 1
-        print(f"{artifact_id}: {'valid' if not errors else 'errors=' + str(errors)}")
+        status = "valid" if not errors else f"errors={len(errors)}"
+        progress.write(f"{artifact_id}: {status}")
     return processed
 
 
@@ -133,7 +146,8 @@ def validate_parsed_dir(work_dir: Path) -> int:
     validation_dir = work_dir / "validation"
     validation_dir.mkdir(parents=True, exist_ok=True)
     failures = 0
-    for parsed_path in sorted((work_dir / "parsed").glob("*.json")):
+    parsed_paths = sorted((work_dir / "parsed").glob("*.json"))
+    for parsed_path in tqdm(parsed_paths, desc="validate", unit="file"):
         with parsed_path.open("r", encoding="utf-8") as file:
             value = json.load(file)
         errors = validate_prediction(value)
@@ -147,4 +161,3 @@ def validate_parsed_dir(work_dir: Path) -> int:
                 indent=2,
             )
     return failures
-
