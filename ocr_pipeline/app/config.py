@@ -11,33 +11,12 @@ class Settings(BaseSettings):
     vllm_max_tokens: int = 4096
     vllm_max_tokens_tx: int = 8192   # bank statement transactions
 
-    # PostgreSQL
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-    postgres_db: str = "ocr_db"
-    postgres_user: str = "ocr_user"
-    postgres_password: str = "change_me"
-
     # Dataset
     per_artifact_dir: str = "/data/fahmai/per_artifact"
 
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8080
-
-    @property
-    def postgres_dsn(self) -> str:
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
-
-    @property
-    def asyncpg_dsn(self) -> str:
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
 
     class Config:
         env_file = ".env"

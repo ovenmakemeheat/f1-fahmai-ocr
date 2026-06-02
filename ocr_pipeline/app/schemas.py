@@ -20,26 +20,9 @@ class OCRResponse(BaseModel):
     status: str
     pred_json: dict[str, Any] | None = None
     error_msg: str | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-class OCRSubmitResponse(BaseModel):
-    artifact_id: str
-    status: str
-    message: str
 
 
 class HealthResponse(BaseModel):
     status: str
     vllm_ok: bool
-    db_ok: bool
     version: str = "1.0.0"
-
-
-class StatsResponse(BaseModel):
-    total: int
-    done: int
-    pending: int
-    processing: int
-    failed: int

@@ -1,16 +1,13 @@
 # app/worker.py
 import asyncio
 import logging
-from .database import update_job_processing, update_job_success, update_job_failed
 from .services.dataset import get_document_metadata
 from .services.ocr import process_single_page, process_bank_header, process_bank_transactions
 
 logger = logging.getLogger(__name__)
 
-async def process_ocr_job(pool, artifact_id: str, doc_type: str, image_b64: str):
+async def process_ocr_job(artifact_id: str, doc_type: str, image_b64: str) -> dict:
     try:
-        await update_job_processing(pool, artifact_id)
-        
         category, pages = get_document_metadata(artifact_id, doc_type)
         if not category:
             category = "unknown"
@@ -44,9 +41,9 @@ async def process_ocr_job(pool, artifact_id: str, doc_type: str, image_b64: str)
             result = await process_single_page(image_b64, visible, category)
             pred_json.update(result)
             
-        await update_job_success(pool, artifact_id, pred_json)
         logger.info(f"Successfully processed {artifact_id}")
+        return pred_json
         
     except Exception as e:
         logger.error(f"Failed processing {artifact_id}: {str(e)}")
-        await update_job_failed(pool, artifact_id, str(e))
+        raise e
