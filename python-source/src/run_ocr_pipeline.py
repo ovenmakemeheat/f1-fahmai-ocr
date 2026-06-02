@@ -10,7 +10,7 @@ from .ocr_config import (
     DEFAULT_WORK_DIR,
     OCR_ARTIFACT_TYPES,
 )
-from .ocr_extract import extract_from_manifest, validate_parsed_dir
+from .ocr_extract import default_worker_count, extract_from_manifest, validate_parsed_dir
 from .ocr_images import prepare_images
 from .ocr_manifest import load_artifact_manifest, manifest_to_jsonl
 from .ocr_submit import write_submission
@@ -52,6 +52,7 @@ def cmd_extract(args: argparse.Namespace) -> None:
         limit=args.limit,
         max_retries=args.max_retries,
         force=args.force,
+        workers=args.workers,
     )
     print(f"Extracted {processed} artifacts")
 
@@ -103,6 +104,15 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--type", choices=OCR_ARTIFACT_TYPES)
     extract.add_argument("--limit", type=int)
     extract.add_argument("--max-retries", type=int, default=int(os.getenv("OCR_MAX_RETRIES", "3")))
+    extract.add_argument(
+        "--workers",
+        type=int,
+        default=default_worker_count(),
+        help=(
+            "Parallel artifact extraction workers. Defaults to OCR_WORKERS "
+            "or a bounded CPU count."
+        ),
+    )
     extract.add_argument("--force", action="store_true")
     extract.set_defaults(func=cmd_extract)
 

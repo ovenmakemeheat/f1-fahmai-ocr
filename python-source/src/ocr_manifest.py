@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tqdm import tqdm
+
 from .ocr_config import DEFAULT_OCR_DATA_DIR, DEFAULT_SAMPLE_PATH
 from .ocr_jsonl import write_jsonl
-from .ocr_records import ArtifactRecord, PageRecord
+from .ocr_records import ArtifactRecord, PageRecord, portable_path
 
 
 def load_sample_artifact_ids(sample_path: Path = DEFAULT_SAMPLE_PATH) -> list[str]:
@@ -47,7 +49,10 @@ def load_artifact_manifest(
     sidecars = _sidecar_paths(data_dir)
     records: list[ArtifactRecord] = []
 
-    for artifact_id in artifact_ids:
+    scan_ids = artifact_ids
+    if limit is not None and artifact_type is None:
+        scan_ids = artifact_ids[:limit]
+    for artifact_id in tqdm(scan_ids, desc="manifest", unit="artifact"):
         if artifact_id not in sidecars:
             raise FileNotFoundError(f"No sidecar JSON found for artifact_id={artifact_id}")
         detected_type, sidecar_path = sidecars[artifact_id]
@@ -88,7 +93,7 @@ def load_artifact_manifest(
                 expected_visible_fields=tuple(visible_field_order),
             )
         )
-        if limit is not None and len(records) >= limit:
+        if artifact_type is not None and limit is not None and len(records) >= limit:
             break
     return records
 
@@ -102,7 +107,7 @@ def manifest_to_jsonl(records: list[ArtifactRecord], output_path: Path) -> None:
             "template_version": artifact.template_version,
             "page_index": page.page_index,
             "page_kind": page.page_kind,
-            "source_path": str(page.source_path),
+            "source_path": portable_path(page.source_path),
             "source_fact_table": page.source_fact_table,
             "source_row_ids": list(page.source_row_ids),
             "visible_fields": list(page.visible_fields),

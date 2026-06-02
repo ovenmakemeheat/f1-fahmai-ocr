@@ -21,6 +21,7 @@ wheels/
 # Data & large files
 data/
 cache/
+work/
 *.csv
 *.parquet
 *.pkl

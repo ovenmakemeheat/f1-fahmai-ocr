@@ -5,6 +5,8 @@ import shutil
 import struct
 from pathlib import Path
 
+from tqdm import tqdm
+
 from .ocr_jsonl import write_jsonl
 from .ocr_records import ArtifactRecord, ImagePageRecord, PageRecord
 
@@ -94,12 +96,12 @@ def prepare_images(
     dpi: int = 250,
     overwrite: bool = False,
 ) -> None:
+    pages = [(artifact, page) for artifact in artifacts for page in artifact.pages]
     write_jsonl(
         manifest_path,
         (
             image_record.to_json()
-            for artifact in artifacts
-            for page in artifact.pages
+            for artifact, page in tqdm(pages, desc="prepare-images", unit="page")
             for image_record in _prepare_image_records(
                 artifact,
                 page,

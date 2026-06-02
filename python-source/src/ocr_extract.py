@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+from tqdm import tqdm
 
 from .ocr_gemini import GeminiClient, call_with_retries
 from .ocr_jsonl import read_jsonl
 from .ocr_parse import parse_json_object
 from .ocr_prompts import build_prompt
-from .ocr_records import ImagePageRecord
+from .ocr_records import ImagePageRecord, portable_path
 from .ocr_validate import validate_prediction
 
 
@@ -39,6 +43,14 @@ def merge_page_predictions(page_predictions: list[dict[str, Any]]) -> dict[str, 
     return merged
 
 
+def default_worker_count() -> int:
+    env_value = os.getenv("OCR_WORKERS")
+    if env_value:
+        return max(1, int(env_value))
+    cpu_count = os.cpu_count() or 1
+    return max(1, min(8, cpu_count))
+
+
 class OcrExtractor:
     def __init__(
         self,
@@ -66,21 +78,35 @@ class OcrExtractor:
         raw_payload: list[dict[str, Any]] = []
         for record in records:
             prompt = build_prompt(record.to_json())
-            raw_text = call_with_retries(
-                self.client,
-                prompt,
-                record.image_path,
-                max_retries=self.max_retries,
-            )
-            page_predictions.append(parse_json_object(raw_text))
+            try:
+                raw_text = call_with_retries(
+                    self.client,
+                    prompt,
+                    record.image_path,
+                    max_retries=self.max_retries,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"OCR failed for artifact={artifact_id}, page={record.page_index}, "
+                    f"image={record.image_index}, path={portable_path(record.image_path)}: {exc}"
+                ) from exc
             raw_payload.append(
                 {
                     "page_index": record.page_index,
                     "image_index": record.image_index,
-                    "image_path": str(record.image_path),
+                    "image_path": portable_path(record.image_path),
                     "response": raw_text,
                 }
             )
+            self._write_json(self.raw_dir / f"{artifact_id}.json", raw_payload)
+            try:
+                page_predictions.append(parse_json_object(raw_text))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Could not parse JSON for artifact={artifact_id}, page={record.page_index}, "
+                    f"image={record.image_index}. Raw response saved to "
+                    f"{self.raw_dir / f'{artifact_id}.json'}"
+                ) from exc
 
         merged = merge_page_predictions(page_predictions)
         errors = validate_prediction(merged)
@@ -105,11 +131,48 @@ def extract_from_manifest(
     limit: int | None,
     max_retries: int,
     force: bool,
+    workers: int | None = None,
 ) -> int:
     image_records = load_image_manifest(image_manifest)
     if artifact_type:
         image_records = [row for row in image_records if row.artifact_type == artifact_type]
     grouped = group_images_by_artifact(image_records)
+    worker_count = workers or default_worker_count()
+
+    artifact_items: list[tuple[str, list[ImagePageRecord]]] = []
+    for artifact_id, records in grouped.items():
+        if (work_dir / "parsed" / f"{artifact_id}.json").exists() and not force:
+            continue
+        artifact_items.append((artifact_id, records))
+        if limit is not None and len(artifact_items) >= limit:
+            break
+
+    if not artifact_items:
+        return 0
+
+    if worker_count <= 1:
+        return _extract_serial(
+            artifact_items=artifact_items,
+            work_dir=work_dir,
+            max_retries=max_retries,
+            force=force,
+        )
+
+    return _extract_parallel(
+        artifact_items=artifact_items,
+        work_dir=work_dir,
+        max_retries=max_retries,
+        force=force,
+        workers=worker_count,
+    )
+
+
+def _extract_serial(
+    artifact_items: list[tuple[str, list[ImagePageRecord]]],
+    work_dir: Path,
+    max_retries: int,
+    force: bool,
+) -> int:
     extractor = OcrExtractor(
         client=GeminiClient(),
         work_dir=work_dir,
@@ -118,22 +181,75 @@ def extract_from_manifest(
     )
 
     processed = 0
-    for artifact_id, records in grouped.items():
-        if extractor.should_skip(artifact_id):
-            continue
-        if limit is not None and processed >= limit:
-            break
+    progress = tqdm(artifact_items, desc="extract", unit="artifact")
+    for artifact_id, records in progress:
+        progress.set_postfix_str(artifact_id, refresh=False)
         errors = extractor.extract_artifact(artifact_id, records)
         processed += 1
-        print(f"{artifact_id}: {'valid' if not errors else 'errors=' + str(errors)}")
+        status = "valid" if not errors else f"errors={len(errors)}"
+        progress.write(f"{artifact_id}: {status}")
     return processed
+
+
+def _extract_parallel(
+    artifact_items: list[tuple[str, list[ImagePageRecord]]],
+    work_dir: Path,
+    max_retries: int,
+    force: bool,
+    workers: int,
+) -> int:
+    processed = 0
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                _extract_artifact_worker,
+                artifact_id,
+                records,
+                work_dir,
+                max_retries,
+                force,
+            ): artifact_id
+            for artifact_id, records in artifact_items
+        }
+        progress = tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc=f"extract x{workers}",
+            unit="artifact",
+        )
+        for future in progress:
+            artifact_id = futures[future]
+            progress.set_postfix_str(artifact_id, refresh=False)
+            completed_artifact_id, errors = future.result()
+            processed += 1
+            status = "valid" if not errors else f"errors={len(errors)}"
+            progress.write(f"{completed_artifact_id}: {status}")
+    return processed
+
+
+def _extract_artifact_worker(
+    artifact_id: str,
+    records: list[ImagePageRecord],
+    work_dir: Path,
+    max_retries: int,
+    force: bool,
+) -> tuple[str, list[str]]:
+    extractor = OcrExtractor(
+        client=GeminiClient(),
+        work_dir=work_dir,
+        max_retries=max_retries,
+        force=force,
+    )
+    errors = extractor.extract_artifact(artifact_id, records)
+    return artifact_id, errors
 
 
 def validate_parsed_dir(work_dir: Path) -> int:
     validation_dir = work_dir / "validation"
     validation_dir.mkdir(parents=True, exist_ok=True)
     failures = 0
-    for parsed_path in sorted((work_dir / "parsed").glob("*.json")):
+    parsed_paths = sorted((work_dir / "parsed").glob("*.json"))
+    for parsed_path in tqdm(parsed_paths, desc="validate", unit="file"):
         with parsed_path.open("r", encoding="utf-8") as file:
             value = json.load(file)
         errors = validate_prediction(value)
@@ -147,4 +263,3 @@ def validate_parsed_dir(work_dir: Path) -> int:
                 indent=2,
             )
     return failures
-
