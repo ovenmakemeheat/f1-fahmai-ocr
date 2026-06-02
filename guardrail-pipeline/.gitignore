@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Linters
+.ruff_cache/
+
+# Project outputs and generated data
+dataset/
+outputs/
+data/
+cache/
+work/
+
+# Models, checkpoints, and large artifacts
+model/
+checkpoints/
+*.ckpt
+*.safetensors
+*.onnx
+*.tar
+*.tar.gz
+*.zip
+*.7z
+
+# Data files
+*.csv
+*.parquet
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.bin
+*.npz
+*.npy
+
+# Submissions
+submission*.csv
+submissions/
