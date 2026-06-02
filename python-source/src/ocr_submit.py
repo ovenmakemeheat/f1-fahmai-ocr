@@ -42,7 +42,7 @@ def write_submission(
             if prediction is None:
                 if not allow_missing:
                     raise FileNotFoundError(f"Missing parsed prediction for {artifact_id}")
-                pred_json = ""
+                pred_json = "{}"
             else:
                 pred_json = json.dumps(prediction, ensure_ascii=False, separators=(",", ":"))
             writer.writerow({"artifact_id": artifact_id, "pred_json": pred_json})

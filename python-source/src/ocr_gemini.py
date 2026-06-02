@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import base64
 import os
 import random
 import re
@@ -22,12 +22,18 @@ SUPPORTED_MIME_TYPES = {
 
 @dataclass(frozen=True)
 class GeminiConfig:
+    provider: str
     model: str
     api_key: str | None
     project: str | None
     location: str
     access_token: str | None
     auth_mode: str
+    openrouter_api_key: str | None
+    openrouter_model: str
+    openrouter_base_url: str
+    openrouter_site_url: str | None
+    openrouter_app_name: str | None
     timeout_seconds: int = 120
 
     @classmethod
@@ -39,12 +45,21 @@ class GeminiConfig:
             access_token = access_token or api_key
             api_key = None
         return cls(
+            provider=os.getenv("OCR_PROVIDER", "vertex").lower(),
             model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
             api_key=api_key,
             project=os.getenv("GOOGLE_CLOUD_PROJECT"),
             location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
             access_token=access_token,
             auth_mode=os.getenv("GOOGLE_GENAI_AUTH", "adc").lower(),
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+            openrouter_model=os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
+            openrouter_base_url=os.getenv(
+                "OPENROUTER_BASE_URL",
+                "https://openrouter.ai/api/v1",
+            ),
+            openrouter_site_url=os.getenv("OPENROUTER_SITE_URL"),
+            openrouter_app_name=os.getenv("OPENROUTER_APP_NAME", "fahmai-ocr-pipeline"),
             timeout_seconds=int(os.getenv("GEMINI_TIMEOUT_SECONDS", "120")),
         )
 
@@ -52,6 +67,14 @@ class GeminiConfig:
 class GeminiClient:
     def __init__(self, config: GeminiConfig | None = None) -> None:
         self.config = config or GeminiConfig.from_env()
+        self._provider = self.config.provider
+        if self._provider == "openrouter":
+            self._init_openrouter()
+            return
+        if self._provider not in {"vertex", "gemini"}:
+            raise RuntimeError(
+                f"Unsupported OCR_PROVIDER={self._provider!r}. Use 'vertex' or 'openrouter'."
+            )
         if not self.config.api_key and not self.config.project:
             raise RuntimeError(
                 "Gemini auth is not configured. Set GOOGLE_CLOUD_PROJECT for Vertex AI "
@@ -98,8 +121,29 @@ class GeminiClient:
         else:
             self._client = genai.Client(api_key=self.config.api_key, http_options=http_options)
 
+    def _init_openrouter(self) -> None:
+        if not self.config.openrouter_api_key:
+            raise RuntimeError("OpenRouter is not configured. Set OPENROUTER_API_KEY.")
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("openai is not installed. Run `uv sync`.") from exc
+        default_headers: dict[str, str] = {}
+        if self.config.openrouter_site_url:
+            default_headers["HTTP-Referer"] = self.config.openrouter_site_url
+        if self.config.openrouter_app_name:
+            default_headers["X-Title"] = self.config.openrouter_app_name
+        self._openrouter_client = OpenAI(
+            api_key=self.config.openrouter_api_key,
+            base_url=self.config.openrouter_base_url,
+            default_headers=default_headers or None,
+            timeout=self.config.timeout_seconds,
+        )
+
     def _endpoint_and_headers(self) -> tuple[str, dict[str, str]]:
         """Kept for lightweight diagnostics; generation uses google-genai."""
+        if self._provider == "openrouter":
+            return self.config.openrouter_base_url, {"Content-Type": "application/json"}
         model = self.config.model
         if self.config.project:
             host = "aiplatform.googleapis.com"
@@ -121,6 +165,8 @@ class GeminiClient:
         raise RuntimeError("Gemini auth is not configured.")
 
     def generate_json_from_image(self, prompt: str, image_path: Path) -> str:
+        if self._provider == "openrouter":
+            return self._generate_json_from_image_openrouter(prompt, image_path)
         suffix = image_path.suffix.lower()
         mime_type = SUPPORTED_MIME_TYPES.get(suffix)
         if not mime_type:
@@ -138,28 +184,34 @@ class GeminiClient:
         )
         return (response.text or "").strip()
 
-    async def generate_json_from_image_async(self, prompt: str, image_path: Path) -> str:
+    def _generate_json_from_image_openrouter(self, prompt: str, image_path: Path) -> str:
         suffix = image_path.suffix.lower()
         mime_type = SUPPORTED_MIME_TYPES.get(suffix)
         if not mime_type:
-            raise ValueError(f"Unsupported image type for Gemini request: {image_path}")
-        response = await self._client.aio.models.generate_content(
-            model=self.config.model,
-            contents=[
-                prompt,
-                self._types.Part.from_bytes(data=image_path.read_bytes(), mime_type=mime_type),
+            raise ValueError(f"Unsupported image type for OpenRouter request: {image_path}")
+        image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        data_url = f"data:{mime_type};base64,{image_b64}"
+        response = self._openrouter_client.chat.completions.create(
+            model=self.config.openrouter_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
             ],
-            config=self._types.GenerateContentConfig(
-                temperature=0,
-                response_mime_type="application/json",
-            ),
+            temperature=0,
+            response_format={"type": "json_object"},
         )
-        return (response.text or "").strip()
+        return (response.choices[0].message.content or "").strip()
 
 
 def _redact_secret_like_values(message: str) -> str:
     message = re.sub(r"ya29\.[A-Za-z0-9._-]+", "[REDACTED_OAUTH_TOKEN]", message)
     message = re.sub(r"AIza[0-9A-Za-z_-]+", "[REDACTED_API_KEY]", message)
+    message = re.sub(r"sk-or-v1-[A-Za-z0-9._-]+", "[REDACTED_OPENROUTER_KEY]", message)
     return message
 
 
@@ -200,36 +252,6 @@ def call_with_retries(
                 f"{sleep_seconds:.1f}s: {error_summary}"
             )
             time.sleep(sleep_seconds)
-    final_summary = describe_error(last_error) if last_error else "unknown error"
-    raise RuntimeError(
-        f"Gemini request failed for {image_path} after {max_retries + 1} attempts: "
-        f"{final_summary}"
-    ) from last_error
-
-
-async def call_with_retries_async(
-    client: GeminiClient,
-    prompt: str,
-    image_path: Path,
-    max_retries: int = 3,
-    base_sleep_seconds: float = 2.0,
-) -> str:
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await client.generate_json_from_image_async(prompt, image_path)
-        except Exception as exc:  # noqa: BLE001 - preserve retry context for CLI
-            last_error = exc
-            error_summary = describe_error(exc)
-            if attempt >= max_retries:
-                break
-            sleep_seconds = retry_sleep_seconds(exc, attempt, base_sleep_seconds)
-            tqdm.write(
-                f"Gemini request failed for {image_path.name} "
-                f"(attempt {attempt + 1}/{max_retries + 1}); retrying in "
-                f"{sleep_seconds:.1f}s: {error_summary}"
-            )
-            await asyncio.sleep(sleep_seconds)
     final_summary = describe_error(last_error) if last_error else "unknown error"
     raise RuntimeError(
         f"Gemini request failed for {image_path} after {max_retries + 1} attempts: "

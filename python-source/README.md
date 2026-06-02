@@ -23,6 +23,7 @@ Default input paths are configured in `src/ocr_config.py`.
 Copy `.env.example` to `.env` and fill in the Vertex settings:
 
 ```env
+OCR_PROVIDER=vertex
 GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 GOOGLE_CLOUD_LOCATION=global
 GEMINI_MODEL=gemini-3.5-flash
@@ -53,6 +54,18 @@ gcloud auth application-default print-access-token
 
 Do not put the token in `.env.example` or commit it.
 `ya29...` values are OAuth bearer tokens, not API keys. If one is accidentally placed in `GEMINI_API_KEY`, the client treats it as a Vertex OAuth token.
+
+To use OpenRouter instead of Vertex, set:
+
+```env
+OCR_PROVIDER=openrouter
+OPENROUTER_API_KEY=your-openrouter-key
+OPENROUTER_MODEL=google/gemini-2.5-flash
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_APP_NAME=fahmai-ocr-pipeline
+```
+
+OpenRouter uses the existing OpenAI-compatible client dependency and sends local images as base64 data URLs.
 
 ## Batch Scripts
 
@@ -129,7 +142,7 @@ Useful options:
 --allow-missing
 ```
 
-`extract` runs image pages concurrently with async Vertex calls. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck. Finished artifacts are tracked under `work/ocr/finished/` and skipped on reruns unless `--force` is used.
+`extract` runs artifacts in parallel worker processes. Set `OCR_WORKERS` in `.env` or pass `--workers`; higher values are faster until Vertex quota, local network, or rate limits become the bottleneck. Parsed artifacts are skipped on reruns unless `--force` is used.
 
 Valid artifact types are defined in `src/ocr_config.py`.
 

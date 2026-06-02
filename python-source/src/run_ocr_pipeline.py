@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=default_worker_count(),
         help=(
-            "Concurrent Vertex image requests. Defaults to OCR_WORKERS "
+            "Parallel artifact extraction workers. Defaults to OCR_WORKERS "
             "or a bounded CPU count."
         ),
     )
