@@ -35,14 +35,12 @@ app = FastAPI(
 
 class PredictRequest(BaseModel):
     text: str = Field(..., min_length=1)
-    model: str | None = Field(default=DEFAULT_MODEL_NAME)
     max_length: int | None = None
     threshold: float | None = None
 
 
 class BatchPredictRequest(BaseModel):
     texts: list[str] = Field(..., min_length=1)
-    model: str | None = Field(default=DEFAULT_MODEL_NAME)
     max_length: int | None = None
     threshold: float | None = None
 
@@ -1129,17 +1127,17 @@ def dashboard_download(download_id: str) -> StreamingResponse:
 def predict(request: PredictRequest) -> Prediction:
     return predict_texts(
         [request.text],
-        model_name=request.model,
+        model_name=DEFAULT_MODEL_NAME,
         max_length=request.max_length,
         threshold=request.threshold,
     )[0]
 
 
-@app.post("/llm/predict", response_model=Prediction)
+@app.post("/predictv2", response_model=Prediction)
 def predict_llm(request: PredictRequest) -> Prediction:
     return predict_text_with_llm(
         request.text,
-        model_name=request.model,
+        model_name=DEFAULT_MODEL_NAME,
         max_length=request.max_length,
         threshold=request.threshold,
     )
@@ -1149,7 +1147,7 @@ def predict_llm(request: PredictRequest) -> Prediction:
 def predict_batch(request: BatchPredictRequest) -> list[Prediction]:
     return predict_texts(
         request.texts,
-        model_name=request.model,
+        model_name=DEFAULT_MODEL_NAME,
         max_length=request.max_length,
         threshold=request.threshold,
     )

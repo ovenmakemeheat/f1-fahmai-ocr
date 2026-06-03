@@ -21,6 +21,7 @@ MODEL_VARIANTS = {
 DEFAULT_MAX_LENGTH = 510
 DEFAULT_ATTACK_THRESHOLD = 0.75
 DEFAULT_DASHBOARD_BATCH_SIZE = 32
+INJECTION_MESSAGE = "ไม่สามารถระบุได้"
 MIN_MAX_LENGTH = 8
 UNBOUNDED_TOKENIZER_LENGTH = 100_000
 
@@ -38,6 +39,7 @@ class Prediction(BaseModel):
     attack_score: float
     threshold: float
     is_attack: bool
+    message: str
     scores: list[Score]
 
 
@@ -239,6 +241,7 @@ def predict_texts(
                 attack_score=attack_score,
                 threshold=attack_threshold,
                 is_attack=attack_score >= attack_threshold,
+                message=INJECTION_MESSAGE if label_id == 1 else "",
                 scores=scores,
             )
         )
