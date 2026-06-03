@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -23,7 +21,6 @@ from src.guardrail_model import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LLM_MODEL_ID = "microhum/qwen3-4b-fahmai-guardrails-v2"
 DEFAULT_LLM_MAX_LENGTH = 2048
-DEFAULT_LLM_MAX_NEW_TOKENS = 64
 LLM_MODEL_VARIANTS = {
     DEFAULT_MODEL_NAME: DEFAULT_LLM_MODEL_ID,
     "qwen3-4b-fahmai-guardrails-v2": DEFAULT_LLM_MODEL_ID,
@@ -83,13 +80,6 @@ def get_llm_max_length(requested_max_length: int | None) -> int:
     return DEFAULT_LLM_MAX_LENGTH
 
 
-def get_llm_max_new_tokens() -> int:
-    configured_max_new_tokens = os.getenv("GUARDRAIL_LLM_MAX_NEW_TOKENS")
-    if configured_max_new_tokens:
-        return int(configured_max_new_tokens)
-    return DEFAULT_LLM_MAX_NEW_TOKENS
-
-
 @lru_cache(maxsize=2)
 def load_llm_model(model_id: str) -> dict[str, Any]:
     try:
@@ -114,6 +104,8 @@ def load_llm_model(model_id: str) -> dict[str, Any]:
         else None
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoPeftModelForCausalLM.from_pretrained(
         model_id,
         device_map="auto" if device.type == "cuda" else None,
@@ -123,12 +115,17 @@ def load_llm_model(model_id: str) -> dict[str, Any]:
     if device.type == "cpu":
         model.to(device)
     model.eval()
+    label_token_ids = {
+        0: get_single_token_ids(tokenizer, ["0", " 0"]),
+        1: get_single_token_ids(tokenizer, ["1", " 1"]),
+    }
 
     return {
         "model_id": model_id,
         "device": next(model.parameters()).device,
         "tokenizer": tokenizer,
         "model": model,
+        "label_token_ids": label_token_ids,
     }
 
 
@@ -147,21 +144,13 @@ def format_inference_prompt(tokenizer: Any, text: str) -> str:
     )
 
 
-def parse_guardrail_json(text: str) -> dict[str, Any]:
-    match = re.search(r"\{.*?\}", text, flags=re.DOTALL)
-    if not match:
-        raise ValueError(f"LLM response did not contain JSON: {text!r}")
-
-    parsed = json.loads(match.group(0))
-    label = int(parsed["label"])
-    if label not in {0, 1}:
-        raise ValueError(f"LLM response label must be 0 or 1, got {label!r}")
-
-    return {
-        "label": label,
-        "category": str(parsed.get("category", "normal" if label == 0 else "prompt_injection")),
-        "raw": text,
-    }
+def get_single_token_ids(tokenizer: Any, candidates: list[str]) -> list[int]:
+    token_ids = []
+    for candidate in candidates:
+        encoded = tokenizer.encode(candidate, add_special_tokens=False)
+        if len(encoded) == 1:
+            token_ids.append(int(encoded[0]))
+    return sorted(set(token_ids))
 
 
 def load_llm_resources_for_request(model_name: str | None) -> tuple[str, dict[str, Any]]:
@@ -176,6 +165,51 @@ def load_llm_resources_for_request(model_name: str | None) -> tuple[str, dict[st
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+def score_label_probabilities(
+    text: str,
+    resources: dict[str, Any],
+    max_length: int,
+) -> tuple[float, float]:
+    tokenizer = resources["tokenizer"]
+    model = resources["model"]
+    device = resources["device"]
+    label_token_ids = resources["label_token_ids"]
+
+    if not label_token_ids[0] or not label_token_ids[1]:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not resolve single-token IDs for labels 0 and 1.",
+        )
+
+    prompt = format_inference_prompt(tokenizer, text)
+    encoded = tokenizer(
+        [prompt + '{"label": '],
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt",
+    )
+    encoded = {key: value.to(device) for key, value in encoded.items()}
+
+    try:
+        with torch.no_grad():
+            logits = model(**encoded).logits[0, -1]
+    except RuntimeError as exc:
+        if device.type == "cuda":
+            raise HTTPException(
+                status_code=500,
+                detail="CUDA LLM inference failed. Restart the API process before retrying.",
+            ) from exc
+        raise
+
+    label_scores = []
+    for label in [0, 1]:
+        token_ids = torch.tensor(label_token_ids[label], device=logits.device)
+        label_scores.append(torch.logsumexp(logits.index_select(0, token_ids), dim=0))
+
+    probabilities = torch.softmax(torch.stack(label_scores), dim=0).detach().cpu()
+    return float(probabilities[0].item()), float(probabilities[1].item())
+
+
 def predict_text_with_llm(
     text: str,
     model_name: str | None = None,
@@ -187,51 +221,16 @@ def predict_text_with_llm(
         raise HTTPException(status_code=400, detail="text must be non-empty")
 
     _, resources = load_llm_resources_for_request(model_name)
-    tokenizer = resources["tokenizer"]
-    model = resources["model"]
-    device = resources["device"]
     attack_threshold = get_threshold(threshold)
     effective_max_length = get_llm_max_length(max_length)
 
-    prompt = format_inference_prompt(tokenizer, cleaned_text)
-    encoded = tokenizer(
-        [prompt],
-        truncation=True,
+    normal_score, attack_score = score_label_probabilities(
+        cleaned_text,
+        resources=resources,
         max_length=effective_max_length,
-        return_tensors="pt",
     )
-    encoded = {key: value.to(device) for key, value in encoded.items()}
-
-    try:
-        with torch.no_grad():
-            outputs = model.generate(
-                **encoded,
-                max_new_tokens=get_llm_max_new_tokens(),
-                temperature=0.0,
-                do_sample=False,
-                use_cache=True,
-            )
-    except RuntimeError as exc:
-        if device.type == "cuda":
-            raise HTTPException(
-                status_code=500,
-                detail="CUDA LLM inference failed. Restart the API process before retrying.",
-            ) from exc
-        raise
-
-    generated = tokenizer.decode(
-        outputs[0][encoded["input_ids"].shape[1] :],
-        skip_special_tokens=True,
-    )
-    try:
-        parsed = parse_guardrail_json(generated)
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    label_id = int(parsed["label"])
+    label_id = 1 if attack_score >= attack_threshold else 0
     label = str(label_id)
-    attack_score = 1.0 if label_id == 1 else 0.0
-    normal_score = 1.0 - attack_score
     score = attack_score if label_id == 1 else normal_score
 
     return Prediction(
