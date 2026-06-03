@@ -1,7 +1,7 @@
 [project]
-name = "spai-asm1"
+name = "guardrail-pipeline"
 version = "0.1.0"
-description = "Super AI Assignment 1: Data Analysis and Visualization"
+description = "A pipeline for fahmai agentic guardrails"
 readme = "README.md"
 requires-python = ">=3.12"
 
