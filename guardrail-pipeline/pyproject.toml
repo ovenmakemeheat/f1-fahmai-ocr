@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "accelerate>=0.33",
+    "bitsandbytes>=0.43",
     "brotli>=1.2.0",
     "fastapi>=0.115",
     "fonttools>=4.62.1",
@@ -27,7 +28,7 @@ dependencies = [
     "torch",
     "tqdm>=4.67.1",
     "transformers>=4.44",
-    "unsloth",
+    "peft>=0.13",
     "uvicorn[standard]>=0.30",
 ]
 

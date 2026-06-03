@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,6 @@ from src.guardrail_model import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LLM_MODEL_ID = "microhum/qwen3-4b-fahmai-guardrails-v2"
-DEFAULT_LLM_BASE_MODEL_ID = "unsloth/Qwen3-4B-unsloth-bnb-4bit"
 DEFAULT_LLM_MAX_LENGTH = 2048
 DEFAULT_LLM_MAX_NEW_TOKENS = 64
 LLM_MODEL_VARIANTS = {
@@ -92,77 +90,43 @@ def get_llm_max_new_tokens() -> int:
     return DEFAULT_LLM_MAX_NEW_TOKENS
 
 
-def get_llm_base_model_id() -> str:
-    return os.getenv("GUARDRAIL_LLM_BASE_MODEL_ID", DEFAULT_LLM_BASE_MODEL_ID)
-
-
-def should_use_unsloth() -> bool:
-    return os.getenv("GUARDRAIL_LLM_USE_UNSLOTH", "true").lower() not in {
-        "0",
-        "false",
-        "no",
-    }
-
-
 @lru_cache(maxsize=2)
 def load_llm_model(model_id: str) -> dict[str, Any]:
+    try:
+        from peft import AutoPeftModelForCausalLM
+        from transformers import AutoTokenizer, BitsAndBytesConfig
+    except ImportError as exc:
+        raise RuntimeError(
+            "PEFT and Transformers are required for /predictv2. "
+            "Install API dependencies with `uv sync`."
+        ) from exc
+
     device = resolve_device()
     load_in_4bit = os.getenv("GUARDRAIL_LLM_LOAD_IN_4BIT", "true").lower() not in {
         "0",
         "false",
         "no",
     }
-    base_model_id = get_llm_base_model_id()
 
-    if should_use_unsloth():
-        try:
-            from peft import PeftModel
-            from unsloth import FastLanguageModel
-        except ImportError as exc:
-            raise RuntimeError(
-                "Unsloth and PEFT are required for /llm/predict. "
-                "Install API dependencies with `uv sync`."
-            ) from exc
-
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=base_model_id,
-            max_seq_length=get_llm_max_length(None),
-            dtype=None,
-            load_in_4bit=load_in_4bit,
-        )
-        model = PeftModel.from_pretrained(model, model_id)
-        FastLanguageModel.for_inference(model)
-    else:
-        try:
-            from peft import PeftModel
-            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        except ImportError as exc:
-            raise RuntimeError(
-                "PEFT and Transformers are required when GUARDRAIL_LLM_USE_UNSLOTH=false."
-            ) from exc
-
-        quantization_config = (
-            BitsAndBytesConfig(load_in_4bit=True)
-            if load_in_4bit and device.type == "cuda"
-            else None
-        )
-        tokenizer = AutoTokenizer.from_pretrained(base_model_id, use_fast=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            base_model_id,
-            device_map="auto" if device.type == "cuda" else None,
-            quantization_config=quantization_config,
-            torch_dtype=torch.bfloat16 if device.type == "cuda" else None,
-        )
-        model = PeftModel.from_pretrained(model, model_id)
-        model.eval()
-
+    quantization_config = (
+        BitsAndBytesConfig(load_in_4bit=True)
+        if load_in_4bit and device.type == "cuda"
+        else None
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    model = AutoPeftModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto" if device.type == "cuda" else None,
+        quantization_config=quantization_config,
+        torch_dtype=torch.bfloat16 if device.type == "cuda" else None,
+    )
     if device.type == "cpu":
         model.to(device)
+    model.eval()
 
     return {
         "model_id": model_id,
-        "base_model_id": base_model_id,
-        "device": device,
+        "device": next(model.parameters()).device,
         "tokenizer": tokenizer,
         "model": model,
     }
@@ -247,16 +211,6 @@ def predict_text_with_llm(
                 do_sample=False,
                 use_cache=True,
             )
-    except subprocess.CalledProcessError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Unsloth/Triton failed while compiling a CUDA helper for inference. "
-                "Install Linux build prerequisites such as gcc and python3-dev on the "
-                "server, or set GUARDRAIL_LLM_USE_UNSLOTH=false to use the "
-                "Transformers+PEFT fallback loader."
-            ),
-        ) from exc
     except RuntimeError as exc:
         if device.type == "cuda":
             raise HTTPException(
