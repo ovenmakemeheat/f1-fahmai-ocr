@@ -1102,6 +1102,9 @@ def render_dashboard(
           if (labelInput) labelInput.value = labelColumn;
           refreshColumnChipState();
         }}
+        function findColumn(columns, name) {{
+          return columns.find((column) => column.toLowerCase() === name.toLowerCase()) || "";
+        }}
         function setColumnTarget(target) {{
           activeColumnTarget = target === "label" ? "label" : "text";
           refreshColumnChipState();
@@ -1137,19 +1140,35 @@ def render_dashboard(
           }}
           const presets = document.createElement("div");
           presets.className = "column-presets";
-          const questionPreset = document.createElement("button");
-          questionPreset.type = "button";
-          questionPreset.className = "preset-button";
-          questionPreset.textContent = "Preset: questions_formatted_id";
-          questionPreset.disabled = !(columns.includes("Instruct") && columns.includes("Label"));
-          questionPreset.addEventListener("click", () => applyColumnPreset("Instruct", "Label"));
-          const instructOnlyPreset = document.createElement("button");
-          instructOnlyPreset.type = "button";
-          instructOnlyPreset.className = "preset-button";
-          instructOnlyPreset.textContent = "Preset: Instruct only";
-          instructOnlyPreset.disabled = !columns.includes("Instruct");
-          instructOnlyPreset.addEventListener("click", () => applyColumnPreset("Instruct", ""));
-          presets.append(questionPreset, instructOnlyPreset);
+          const presetConfigs = [
+            {{
+              label: "Preset: questions_formatted_id",
+              text: findColumn(columns, "Instruct"),
+              labelColumn: findColumn(columns, "Label"),
+              requireLabel: true,
+            }},
+            {{
+              label: "Preset: INJ",
+              text: findColumn(columns, "question"),
+              labelColumn: findColumn(columns, "Label"),
+              requireLabel: true,
+            }},
+            {{
+              label: "Preset: redteam question",
+              text: findColumn(columns, "question"),
+              labelColumn: "",
+              requireLabel: false,
+            }},
+          ];
+          for (const config of presetConfigs) {{
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "preset-button";
+            button.textContent = config.label;
+            button.disabled = !config.text || (config.requireLabel && !config.labelColumn);
+            button.addEventListener("click", () => applyColumnPreset(config.text, config.labelColumn));
+            presets.appendChild(button);
+          }}
           const previewWrap = document.createElement("div");
           previewWrap.className = "column-preview-wrap";
           const table = document.createElement("table");
@@ -1213,6 +1232,8 @@ def render_dashboard(
             const input = document.getElementById(inputId);
             if (input) input.addEventListener("input", refreshColumnChipState);
           }}
+          const fileInput = document.getElementById("file");
+          if (fileInput) fileInput.addEventListener("change", () => loadCsvColumns(fileInput));
           refreshColumnChipState();
           for (const form of document.querySelectorAll("form")) {{
             form.addEventListener("submit", () => {{
