@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.dashboard_utils import prediction_row, prediction_rows
 from src.guardrail_model import (
     DEFAULT_ATTACK_THRESHOLD,
     DEFAULT_DASHBOARD_BATCH_SIZE,
@@ -270,9 +271,19 @@ def render_cell(column: str, value: Any) -> str:
     return escape(value)
 
 
-def render_dashboard(error: str | None = None, result: dict[str, Any] | None = None) -> str:
+def render_dashboard(
+    error: str | None = None,
+    result: dict[str, Any] | None = None,
+    title: str = "Guardrail Dashboard",
+    subtitle: str = "Upload a CSV, choose the text and optional label columns, then run the guardrail classifier.",
+    query_action: str = "/dashboard/query",
+    upload_action: str = "/dashboard",
+    api_endpoint: str = "/predict",
+    default_max_length: int = DEFAULT_MAX_LENGTH,
+    max_length_env: str = "GUARDRAIL_MAX_LENGTH",
+) -> str:
     threshold = escape(os.getenv("GUARDRAIL_ATTACK_THRESHOLD", str(DEFAULT_ATTACK_THRESHOLD)))
-    max_length = escape(os.getenv("GUARDRAIL_MAX_LENGTH", str(DEFAULT_MAX_LENGTH)))
+    max_length = escape(os.getenv(max_length_env, str(default_max_length)))
     error_html = f'<div class="alert error">{escape(error)}</div>' if error else ""
     result_html = ""
 
@@ -394,7 +405,7 @@ def render_dashboard(error: str | None = None, result: dict[str, Any] | None = N
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Guardrail Dashboard</title>
+      <title>{escape(title)}</title>
       <style>
         :root {{
           color-scheme: light;
@@ -704,12 +715,12 @@ def render_dashboard(error: str | None = None, result: dict[str, Any] | None = N
     </head>
     <body>
       <main>
-        <h1>Guardrail Dashboard</h1>
-        <p class="subhead">Upload a CSV, choose the text and optional label columns, then run the guardrail classifier.</p>
+        <h1>{escape(title)}</h1>
+        <p class="subhead">{escape(subtitle)}</p>
         {error_html}
         <section>
           <div class="section-title">Single Text Query</div>
-          <form action="/dashboard/query" method="post">
+          <form action="{escape(query_action)}" method="post">
             <label for="query_text">Text editor</label>
             <textarea id="query_text" name="query_text" placeholder="Paste or type one request to classify..." required></textarea>
             <div class="grid" style="margin-top: 14px;">
@@ -730,7 +741,7 @@ def render_dashboard(error: str | None = None, result: dict[str, Any] | None = N
         </section>
         <section>
           <div class="section-title">CSV Batch Prediction</div>
-          <form action="/dashboard" method="post" enctype="multipart/form-data">
+          <form action="{escape(upload_action)}" method="post" enctype="multipart/form-data">
             <div class="grid">
               <div>
                 <label for="file">CSV file</label>
@@ -770,7 +781,7 @@ def render_dashboard(error: str | None = None, result: dict[str, Any] | None = N
             </div>
             <div class="actions">
               <button type="submit">Run prediction</button>
-              <span class="hint">Legacy files can use text column <strong>Instruct</strong> and label column <strong>Label</strong>.</span>
+              <span class="hint">API endpoint: <strong>{escape(api_endpoint)}</strong>. Legacy files can use text column <strong>Instruct</strong> and label column <strong>Label</strong>.</span>
             </div>
           </form>
         </section>
@@ -793,6 +804,26 @@ def parse_optional_float(value: str | None) -> float | None:
     return float(value)
 
 
+def render_dashboard_v2(
+    error: str | None = None,
+    result: dict[str, Any] | None = None,
+) -> str:
+    return render_dashboard(
+        error=error,
+        result=result,
+        title="Guardrail Dashboard V2",
+        subtitle=(
+            "Run the Qwen3 LoRA guardrail. Predictions use label-token probabilities; "
+            "label 1 probability is compared with the threshold."
+        ),
+        query_action="/dashboardv2/query",
+        upload_action="/dashboardv2",
+        api_endpoint="/predictv2",
+        default_max_length=2048,
+        max_length_env="GUARDRAIL_LLM_MAX_LENGTH",
+    )
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     model_id = resolve_model_id(DEFAULT_MODEL_NAME)
@@ -810,6 +841,12 @@ def health() -> HealthResponse:
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> HTMLResponse:
     return HTMLResponse(render_dashboard())
+
+
+@app.get("/dashboardv2", response_class=HTMLResponse)
+@app.get("/dashboard/predictv2", response_class=HTMLResponse)
+def dashboard_v2() -> HTMLResponse:
+    return HTMLResponse(render_dashboard_v2())
 
 
 @app.post("/dashboard", response_class=HTMLResponse)
@@ -1021,6 +1058,201 @@ async def dashboard_upload(
         return HTMLResponse(render_dashboard(error=str(exc)), status_code=400)
 
 
+@app.post("/dashboardv2", response_class=HTMLResponse)
+@app.post("/dashboard/predictv2", response_class=HTMLResponse)
+async def dashboard_v2_upload(
+    file: UploadFile = File(...),
+    text_column: str = Form("text"),
+    label_column: str = Form("label"),
+    validate_binary: bool = Form(False),
+    threshold: str | None = Form(None),
+    max_length: str | None = Form(None),
+    preview_rows: int = Form(50),
+    batch_size: int = Form(DEFAULT_DASHBOARD_BATCH_SIZE),
+) -> HTMLResponse:
+    try:
+        if not file.filename:
+            raise ValueError("Please upload a CSV file.")
+        if not file.filename.lower().endswith(".csv"):
+            raise ValueError("Only CSV files are supported.")
+
+        content = await file.read()
+        frame = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
+
+        text_column = text_column.strip()
+        label_column = label_column.strip()
+        if text_column not in frame.columns:
+            raise ValueError(
+                f"Text column '{text_column}' was not found. Available columns: "
+                f"{', '.join(map(str, frame.columns))}"
+            )
+
+        has_label = bool(label_column) and label_column in frame.columns
+        if label_column and label_column not in frame.columns:
+            raise ValueError(
+                f"Label column '{label_column}' was not found. Leave it blank for prediction-only mode."
+            )
+
+        work = frame.copy()
+        work[text_column] = work[text_column].astype(str).str.strip()
+        work = work[work[text_column].ne("")].reset_index(drop=True)
+        if work.empty:
+            raise ValueError("No non-empty text rows found after cleaning.")
+        if preview_rows < 1:
+            raise ValueError("preview_rows must be at least 1.")
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1.")
+
+        requested_threshold = parse_optional_float(threshold)
+        requested_max_length = parse_optional_int(max_length)
+
+        true_labels: list[int] | None = None
+        if has_label:
+            numeric_labels = pd.to_numeric(work[label_column], errors="coerce")
+            invalid_count = int(numeric_labels.isna().sum())
+            if invalid_count:
+                raise ValueError(f"Label column has {invalid_count} non-numeric value(s).")
+
+            true_labels = numeric_labels.astype(int).tolist()
+            unique_labels = sorted(set(true_labels))
+            if validate_binary and not set(unique_labels).issubset({0, 1}):
+                raise ValueError(
+                    "Label column is not binary. Expected only 0/1 values; "
+                    f"found {unique_labels}."
+                )
+
+        predictions = [
+            predict_text_with_llm(
+                text,
+                model_name=DEFAULT_MODEL_NAME,
+                max_length=requested_max_length,
+                threshold=requested_threshold,
+            )
+            for text in work[text_column].tolist()
+        ]
+
+        output = work.copy()
+        for column, values in pd.DataFrame(
+            prediction_rows(predictions, work[text_column].tolist(), text_column)
+        ).items():
+            if column != text_column:
+                output[column] = values
+        output["text_length"] = output[text_column].astype(str).str.len()
+
+        metrics: dict[str, Any] = {
+            "endpoint": "/predictv2",
+            "rows": len(output),
+            "model": "qwen3-4b-fahmai-guardrails-v2",
+            "scoring": "next-token label probability",
+            "threshold": f"{predictions[0].threshold:.2f}",
+            "max_length": requested_max_length or 2048,
+            "attack_rate": f"{output['is_attack'].mean():.3f}",
+            "avg_label_1_probability": f"{output['label_1_probability'].mean():.3f}",
+            "filename": file.filename,
+        }
+
+        wrong_rows = pd.DataFrame()
+        if true_labels is not None:
+            output["true_label"] = true_labels
+            output["true_is_attack"] = output["true_label"].astype(int) == 1
+            output["is_wrong"] = output["true_is_attack"] != output["is_attack"]
+            wrong_rows = output[output["is_wrong"]].copy()
+            accuracy = 1 - (len(wrong_rows) / max(1, len(output)))
+            metrics["accuracy"] = f"{accuracy:.3f}"
+            metrics["wrong"] = len(wrong_rows)
+            metrics["wrong_rate"] = f"{output['is_wrong'].mean():.3f}"
+
+        download_id = uuid.uuid4().hex
+        DASHBOARD_DOWNLOADS[download_id] = output.to_csv(index=False)
+
+        label_distribution = (
+            make_distribution(output[label_column])
+            if has_label and label_column in output.columns
+            else []
+        )
+        preview_columns = [
+            column
+            for column in [
+                "prediction_no",
+                text_column,
+                label_column if has_label else None,
+                "predicted_label",
+                "label_0_probability",
+                "label_1_probability",
+                "label_confidence",
+                "threshold",
+                "is_attack",
+                "message",
+                "is_wrong" if "is_wrong" in output.columns else None,
+            ]
+            if column
+        ]
+        risky_columns = preview_columns
+        wrong_columns = [
+            column
+            for column in [
+                "prediction_no",
+                text_column,
+                label_column if has_label else None,
+                "predicted_label",
+                "label_1_probability",
+                "threshold",
+                "is_attack",
+                "message",
+            ]
+            if column
+        ]
+
+        result = {
+            "metrics": metrics,
+            "download_id": download_id,
+            "column_profiles": profile_columns(
+                frame,
+                text_column=text_column,
+                label_column=label_column if has_label else None,
+            ),
+            "prediction_distribution": make_distribution(output["predicted_label"]),
+            "attack_distribution": make_distribution(output["is_attack"].map({True: "attack", False: "normal"})),
+            "label_distribution": label_distribution,
+            "category_distribution": make_distribution(output["Category"])
+            if "Category" in output.columns
+            else [],
+            "confidence_distribution": make_numeric_bins(
+                output["label_confidence"],
+                [
+                    ("0.00-0.50", 0, 0.5),
+                    ("0.50-0.70", 0.5, 0.7),
+                    ("0.70-0.85", 0.7, 0.85),
+                    ("0.85-0.95", 0.85, 0.95),
+                    ("0.95-1.00", 0.95, 1.01),
+                ],
+            ),
+            "text_length_distribution": make_text_length_bins(output["text_length"]),
+            "threshold_curve": make_threshold_curve(output),
+            "confusion_distribution": make_confusion_counts(output),
+            "wrong_by_category": group_wrong_distribution(output, "Category"),
+            "wrong_by_source_file": group_wrong_distribution(output, "source_file"),
+            "risky_columns": risky_columns,
+            "risky_rows": output.sort_values("label_1_probability", ascending=False)
+            .head(25)[risky_columns]
+            .to_dict(orient="records"),
+            "low_confidence_rows": output.sort_values("label_confidence", ascending=True)
+            .head(25)[risky_columns]
+            .to_dict(orient="records"),
+            "columns": preview_columns,
+            "preview_rows": output[preview_columns]
+            .head(min(preview_rows, 500))
+            .to_dict(orient="records"),
+            "wrong_columns": wrong_columns,
+            "wrong_rows": wrong_rows[wrong_columns].head(100).to_dict(orient="records")
+            if not wrong_rows.empty
+            else [],
+        }
+        return HTMLResponse(render_dashboard_v2(result=result))
+    except Exception as exc:
+        return HTMLResponse(render_dashboard_v2(error=str(exc)), status_code=400)
+
+
 @app.post("/dashboard/query", response_class=HTMLResponse)
 async def dashboard_query(
     query_text: str = Form(...),
@@ -1108,6 +1340,89 @@ async def dashboard_query(
         return HTMLResponse(render_dashboard(result=result))
     except Exception as exc:
         return HTMLResponse(render_dashboard(error=str(exc)), status_code=400)
+
+
+@app.post("/dashboardv2/query", response_class=HTMLResponse)
+@app.post("/dashboard/predictv2/query", response_class=HTMLResponse)
+async def dashboard_v2_query(
+    query_text: str = Form(...),
+    threshold: str | None = Form(None),
+    max_length: str | None = Form(None),
+) -> HTMLResponse:
+    try:
+        text = query_text.strip()
+        if not text:
+            raise ValueError("Text query must not be empty.")
+
+        requested_threshold = parse_optional_float(threshold)
+        requested_max_length = parse_optional_int(max_length)
+        prediction = predict_text_with_llm(
+            text,
+            model_name=DEFAULT_MODEL_NAME,
+            max_length=requested_max_length,
+            threshold=requested_threshold,
+        )
+
+        output = pd.DataFrame([prediction_row(prediction, 1, text)])
+        output["text_length"] = output["text"].astype(str).str.len()
+
+        download_id = uuid.uuid4().hex
+        DASHBOARD_DOWNLOADS[download_id] = output.to_csv(index=False)
+        preview_columns = [
+            "prediction_no",
+            "text",
+            "predicted_label",
+            "label_0_probability",
+            "label_1_probability",
+            "label_confidence",
+            "threshold",
+            "is_attack",
+            "message",
+        ]
+
+        result = {
+            "metrics": {
+                "endpoint": "/predictv2",
+                "rows": 1,
+                "model": "qwen3-4b-fahmai-guardrails-v2",
+                "scoring": "next-token label probability",
+                "decision": "attack" if prediction.is_attack else "normal",
+                "label_1_probability": format_float(prediction.attack_score),
+                "threshold": format_float(prediction.threshold),
+                "message": prediction.message,
+            },
+            "download_id": download_id,
+            "column_profiles": profile_columns(output, text_column="text", label_column=None),
+            "prediction_distribution": make_distribution(output["predicted_label"]),
+            "attack_distribution": make_distribution(output["is_attack"].map({True: "attack", False: "normal"})),
+            "label_distribution": [],
+            "category_distribution": [],
+            "confidence_distribution": make_numeric_bins(
+                output["label_confidence"],
+                [
+                    ("0.00-0.50", 0, 0.5),
+                    ("0.50-0.70", 0.5, 0.7),
+                    ("0.70-0.85", 0.7, 0.85),
+                    ("0.85-0.95", 0.85, 0.95),
+                    ("0.95-1.00", 0.95, 1.01),
+                ],
+            ),
+            "text_length_distribution": make_text_length_bins(output["text_length"]),
+            "threshold_curve": make_threshold_curve(output),
+            "confusion_distribution": [],
+            "wrong_by_category": [],
+            "wrong_by_source_file": [],
+            "risky_columns": preview_columns,
+            "risky_rows": output[preview_columns].to_dict(orient="records"),
+            "low_confidence_rows": output[preview_columns].to_dict(orient="records"),
+            "columns": preview_columns,
+            "preview_rows": output[preview_columns].to_dict(orient="records"),
+            "wrong_columns": preview_columns,
+            "wrong_rows": [],
+        }
+        return HTMLResponse(render_dashboard_v2(result=result))
+    except Exception as exc:
+        return HTMLResponse(render_dashboard_v2(error=str(exc)), status_code=400)
 
 
 @app.get("/dashboard/download/{download_id}")
