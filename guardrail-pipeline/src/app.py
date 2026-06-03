@@ -604,6 +604,107 @@ def render_dashboard(
           flex-wrap: wrap;
           gap: 8px;
         }}
+        .column-presets {{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-bottom: 10px;
+        }}
+        .preset-button {{
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #fff;
+          color: #334155;
+          min-height: 34px;
+          padding: 7px 10px;
+          font-size: 12px;
+          font-weight: 800;
+        }}
+        .preset-button:hover {{
+          border-color: var(--accent);
+          background: #ecfdf5;
+          color: var(--accent-dark);
+        }}
+        .preset-button:disabled {{
+          opacity: 0.45;
+          cursor: not-allowed;
+        }}
+        .column-mode {{
+          display: inline-flex;
+          gap: 6px;
+          padding: 4px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #fff;
+        }}
+        .mode-button {{
+          border: 1px solid transparent;
+          border-radius: 5px;
+          background: transparent;
+          color: #334155;
+          min-height: 32px;
+          padding: 6px 10px;
+          font-size: 12px;
+        }}
+        .mode-button.active {{
+          background: var(--accent);
+          color: #fff;
+        }}
+        .column-preview-wrap {{
+          margin-top: 12px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #fff;
+          overflow: auto;
+        }}
+        .column-preview {{
+          min-width: 100%;
+          border-collapse: collapse;
+          font-size: 12px;
+        }}
+        .column-preview th,
+        .column-preview td {{
+          border-bottom: 1px solid var(--border);
+          border-right: 1px solid var(--border);
+          padding: 7px 8px;
+          max-width: 260px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }}
+        .column-preview th {{
+          background: #f1f5f9;
+          position: sticky;
+          top: 0;
+          z-index: 1;
+        }}
+        .column-header-button {{
+          width: 100%;
+          min-height: 30px;
+          border: 1px solid var(--border);
+          border-radius: 5px;
+          background: #fff;
+          color: #334155;
+          text-align: left;
+          padding: 6px 8px;
+          font-size: 12px;
+          font-weight: 900;
+        }}
+        .column-header-button:hover {{
+          border-color: var(--accent);
+          background: #ecfdf5;
+          color: var(--accent-dark);
+        }}
+        .column-header-button.selected-text {{
+          border-color: var(--accent);
+          background: #ccfbf1;
+          color: var(--accent-dark);
+        }}
+        .column-header-button.selected-label {{
+          border-color: #0369a1;
+          background: #e0f2fe;
+          color: #075985;
+        }}
         .selected-column {{
           min-height: 38px;
           border: 1px dashed var(--border);
@@ -937,8 +1038,9 @@ def render_dashboard(
             row.style.display = row.textContent.toLowerCase().includes("attack") ? "" : "none";
           }}
         }}
-        function parseCsvHeaderLine(line) {{
-          const columns = [];
+        let activeColumnTarget = "text";
+        function parseCsvLine(line) {{
+          const cells = [];
           let current = "";
           let quoted = false;
           for (let index = 0; index < line.length; index++) {{
@@ -950,14 +1052,21 @@ def render_dashboard(
             }} else if (char === '"') {{
               quoted = !quoted;
             }} else if (char === "," && !quoted) {{
-              columns.push(current.trim());
+              cells.push(current.trim().replace(/^\uFEFF/, ""));
               current = "";
             }} else {{
               current += char;
             }}
           }}
-          columns.push(current.trim());
-          return columns.filter(Boolean);
+          cells.push(current.trim().replace(/^\uFEFF/, ""));
+          return cells;
+        }}
+        function parseCsvPreview(text) {{
+          const lines = String(text || "").split(/\r?\n/).filter((line) => line.trim());
+          if (!lines.length) return {{ columns: [], rows: [] }};
+          const columns = parseCsvLine(lines[0]).filter(Boolean);
+          const rows = lines.slice(1, 7).map((line) => parseCsvLine(line));
+          return {{ columns, rows }};
         }}
         function refreshColumnChipState() {{
           const textColumn = document.getElementById("text_column")?.value;
@@ -972,9 +1081,12 @@ def render_dashboard(
             labelDisplay.textContent = labelColumn || "Optional: click Label on a 0/1 column";
             labelDisplay.classList.toggle("filled", Boolean(labelColumn));
           }}
-          for (const chip of document.querySelectorAll(".column-chip")) {{
-            chip.classList.toggle("selected-text", chip.dataset.role === "text" && chip.dataset.column === textColumn);
-            chip.classList.toggle("selected-label", chip.dataset.role === "label" && chip.dataset.column === labelColumn);
+          for (const chip of document.querySelectorAll(".column-chip, .column-header-button")) {{
+            chip.classList.toggle("selected-text", chip.dataset.column === textColumn);
+            chip.classList.toggle("selected-label", chip.dataset.column === labelColumn);
+          }}
+          for (const button of document.querySelectorAll(".mode-button")) {{
+            button.classList.toggle("active", button.dataset.target === activeColumnTarget);
           }}
         }}
         function chooseColumn(column, target) {{
@@ -983,15 +1095,18 @@ def render_dashboard(
           input.value = column;
           refreshColumnChipState();
         }}
-        function pickLikelyColumn(columns, candidates, fallback = "") {{
-          const lowerMap = new Map(columns.map((column) => [column.toLowerCase(), column]));
-          for (const candidate of candidates) {{
-            const matched = lowerMap.get(candidate.toLowerCase());
-            if (matched) return matched;
-          }}
-          return fallback;
+        function applyColumnPreset(textColumn, labelColumn = "") {{
+          const textInput = document.getElementById("text_column");
+          const labelInput = document.getElementById("label_column");
+          if (textInput) textInput.value = textColumn;
+          if (labelInput) labelInput.value = labelColumn;
+          refreshColumnChipState();
         }}
-        function renderColumnPicker(columns) {{
+        function setColumnTarget(target) {{
+          activeColumnTarget = target === "label" ? "label" : "text";
+          refreshColumnChipState();
+        }}
+        function renderColumnPicker(columns, rows = []) {{
           const panel = document.getElementById("columnPanel");
           const picker = document.getElementById("columnPicker");
           const status = document.getElementById("columnStatus");
@@ -1006,33 +1121,69 @@ def render_dashboard(
           status.textContent = `${{columns.length}} columns detected`;
           const textInput = document.getElementById("text_column");
           const labelInput = document.getElementById("label_column");
-          if (textInput) textInput.value = pickLikelyColumn(columns, ["Instruct", "text", "prompt", "question"], columns[0] || "");
-          if (labelInput) labelInput.value = pickLikelyColumn(columns, ["Label", "label", "is_attack", "target"], "");
+          if (textInput) textInput.value = "";
+          if (labelInput) labelInput.value = "";
           picker.replaceChildren();
-          for (const column of columns) {{
-            const group = document.createElement("span");
-            group.className = "column-group";
-            const name = document.createElement("span");
-            name.className = "column-name";
-            name.textContent = column;
-            name.title = column;
-            const textButton = document.createElement("button");
-            textButton.type = "button";
-            textButton.className = "column-chip";
-            textButton.dataset.column = column;
-            textButton.dataset.role = "text";
-            textButton.textContent = "Text";
-            textButton.addEventListener("click", () => chooseColumn(column, "text"));
-            const labelButton = document.createElement("button");
-            labelButton.type = "button";
-            labelButton.className = "column-chip";
-            labelButton.dataset.column = column;
-            labelButton.dataset.role = "label";
-            labelButton.textContent = "Label";
-            labelButton.addEventListener("click", () => chooseColumn(column, "label"));
-            group.append(name, textButton, labelButton);
-            picker.appendChild(group);
+          const mode = document.createElement("div");
+          mode.className = "column-mode";
+          for (const target of ["text", "label"]) {{
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "mode-button";
+            button.dataset.target = target;
+            button.textContent = target === "text" ? "Assign as Text" : "Assign as Label";
+            button.addEventListener("click", () => setColumnTarget(target));
+            mode.appendChild(button);
           }}
+          const presets = document.createElement("div");
+          presets.className = "column-presets";
+          const questionPreset = document.createElement("button");
+          questionPreset.type = "button";
+          questionPreset.className = "preset-button";
+          questionPreset.textContent = "Preset: questions_formatted_id";
+          questionPreset.disabled = !(columns.includes("Instruct") && columns.includes("Label"));
+          questionPreset.addEventListener("click", () => applyColumnPreset("Instruct", "Label"));
+          const instructOnlyPreset = document.createElement("button");
+          instructOnlyPreset.type = "button";
+          instructOnlyPreset.className = "preset-button";
+          instructOnlyPreset.textContent = "Preset: Instruct only";
+          instructOnlyPreset.disabled = !columns.includes("Instruct");
+          instructOnlyPreset.addEventListener("click", () => applyColumnPreset("Instruct", ""));
+          presets.append(questionPreset, instructOnlyPreset);
+          const previewWrap = document.createElement("div");
+          previewWrap.className = "column-preview-wrap";
+          const table = document.createElement("table");
+          table.className = "column-preview";
+          const thead = document.createElement("thead");
+          const headerRow = document.createElement("tr");
+          for (const column of columns) {{
+            const th = document.createElement("th");
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "column-header-button";
+            button.dataset.column = column;
+            button.textContent = column;
+            button.title = `Click to assign ${{column}} as ${{activeColumnTarget}}`;
+            button.addEventListener("click", () => chooseColumn(column, activeColumnTarget));
+            th.appendChild(button);
+            headerRow.appendChild(th);
+          }}
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+          const tbody = document.createElement("tbody");
+          for (const row of rows) {{
+            const tr = document.createElement("tr");
+            for (let index = 0; index < columns.length; index++) {{
+              const td = document.createElement("td");
+              td.textContent = row[index] || "";
+              td.title = row[index] || "";
+              tr.appendChild(td);
+            }}
+            tbody.appendChild(tr);
+          }}
+          table.appendChild(tbody);
+          previewWrap.appendChild(table);
+          picker.append(presets, mode, previewWrap);
           refreshColumnChipState();
         }}
         function loadCsvColumns(input) {{
@@ -1043,10 +1194,11 @@ def render_dashboard(
           }}
           const reader = new FileReader();
           reader.onload = () => {{
-            const firstLine = String(reader.result || "").split(/\r?\n/, 1)[0] || "";
-            renderColumnPicker(parseCsvHeaderLine(firstLine));
+            const preview = parseCsvPreview(reader.result || "");
+            renderColumnPicker(preview.columns, preview.rows);
           }};
-          reader.readAsText(file.slice(0, 16384));
+          reader.onerror = () => renderColumnPicker([]);
+          reader.readAsText(file.slice(0, 65536));
         }}
         function startLoading(message) {{
           const overlayText = document.getElementById("loadingText");
@@ -1104,11 +1256,11 @@ def render_dashboard(
               <div>
                 <label for="file">CSV file</label>
                 <input id="file" name="file" type="file" accept=".csv,text/csv" onchange="loadCsvColumns(this)" required>
-                <div class="field-note">Choose a file, then click a detected column below.</div>
+                <div class="field-note">Choose a file, then use the preview headers below.</div>
               </div>
               <div>
                 <label for="text_column">Text column</label>
-                <input id="text_column" name="text_column" type="hidden" value="text">
+                <input id="text_column" name="text_column" type="hidden" value="">
                 <div id="selectedTextColumn" class="selected-column"></div>
               </div>
               <div>
@@ -1146,7 +1298,7 @@ def render_dashboard(
                 <div id="columnStatus" class="column-panel-status"></div>
               </div>
               <div id="columnPicker" class="column-picker"></div>
-              <div class="field-note">Use Text for the request body and Label for optional 0/1 validation.</div>
+              <div class="field-note">Use a preset for dataset/test CSVs, or select a mode and click a preview header.</div>
             </div>
             <div class="actions">
               <button class="submit-button" type="submit">Run prediction</button>
@@ -1247,6 +1399,8 @@ async def dashboard_upload(
 
         text_column = text_column.strip()
         label_column = label_column.strip()
+        if not text_column:
+            raise ValueError("Please select a text column from the CSV preview.")
         if text_column not in frame.columns:
             raise ValueError(
                 f"Text column '{text_column}' was not found. Available columns: "
@@ -1457,6 +1611,8 @@ async def dashboard_v2_upload(
 
         text_column = text_column.strip()
         label_column = label_column.strip()
+        if not text_column:
+            raise ValueError("Please select a text column from the CSV preview.")
         if text_column not in frame.columns:
             raise ValueError(
                 f"Text column '{text_column}' was not found. Available columns: "
