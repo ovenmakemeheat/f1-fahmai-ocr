@@ -46,6 +46,20 @@ class BatchPredictRequest(BaseModel):
     threshold: float | None = None
 
 
+class ResponseScore(BaseModel):
+    is_attack: bool
+    score: float
+
+
+class PredictResponse(BaseModel):
+    is_attack: bool
+    message: str
+    text: str
+    threshold: float
+    confident: float
+    scores: list[ResponseScore]
+
+
 class HealthResponse(BaseModel):
     status: str
     default_model: str
@@ -60,6 +74,30 @@ def escape(value: Any) -> str:
 
 def format_float(value: float) -> str:
     return f"{value:.3f}"
+
+
+def prediction_score_by_attack(prediction: Prediction, is_attack: bool) -> float:
+    target_labels = {"1", "attack", "prompt_injection"} if is_attack else {"0", "normal"}
+    for score in prediction.scores:
+        if str(score.label).lower() in target_labels:
+            return score.score
+    return prediction.attack_score if is_attack else max(0.0, 1.0 - prediction.attack_score)
+
+
+def prediction_response(prediction: Prediction) -> PredictResponse:
+    normal_score = prediction_score_by_attack(prediction, is_attack=False)
+    attack_score = prediction_score_by_attack(prediction, is_attack=True)
+    return PredictResponse(
+        is_attack=prediction.is_attack,
+        message=prediction.message,
+        text=prediction.text,
+        threshold=prediction.threshold,
+        confident=attack_score if prediction.is_attack else normal_score,
+        scores=[
+            ResponseScore(is_attack=False, score=normal_score),
+            ResponseScore(is_attack=True, score=attack_score),
+        ],
+    )
 
 
 def make_distribution(items: pd.Series, limit: int = 12) -> list[dict[str, Any]]:
@@ -1438,31 +1476,34 @@ def dashboard_download(download_id: str) -> StreamingResponse:
     )
 
 
-@app.post("/predict", response_model=Prediction)
-def predict(request: PredictRequest) -> Prediction:
-    return predict_texts(
+@app.post("/predict", response_model=PredictResponse)
+def predict(request: PredictRequest) -> PredictResponse:
+    prediction = predict_texts(
         [request.text],
         model_name=DEFAULT_MODEL_NAME,
         max_length=request.max_length,
         threshold=request.threshold,
     )[0]
+    return prediction_response(prediction)
 
 
-@app.post("/predictv2", response_model=Prediction)
-def predict_llm(request: PredictRequest) -> Prediction:
-    return predict_text_with_llm(
+@app.post("/predictv2", response_model=PredictResponse)
+def predict_llm(request: PredictRequest) -> PredictResponse:
+    prediction = predict_text_with_llm(
         request.text,
         model_name=DEFAULT_MODEL_NAME,
         max_length=request.max_length,
         threshold=request.threshold,
     )
+    return prediction_response(prediction)
 
 
-@app.post("/predict/batch", response_model=list[Prediction])
-def predict_batch(request: BatchPredictRequest) -> list[Prediction]:
-    return predict_texts(
+@app.post("/predict/batch", response_model=list[PredictResponse])
+def predict_batch(request: BatchPredictRequest) -> list[PredictResponse]:
+    predictions = predict_texts(
         request.texts,
         model_name=DEFAULT_MODEL_NAME,
         max_length=request.max_length,
         threshold=request.threshold,
     )
+    return [prediction_response(prediction) for prediction in predictions]
