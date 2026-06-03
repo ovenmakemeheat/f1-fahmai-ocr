@@ -22,6 +22,7 @@ from src.guardrail_model import (
     predict_texts_batched,
     resolve_model_id,
 )
+from src.llm_guardrail_model import predict_text_with_llm
 
 DASHBOARD_DOWNLOADS: dict[str, str] = {}
 
@@ -1132,6 +1133,16 @@ def predict(request: PredictRequest) -> Prediction:
         max_length=request.max_length,
         threshold=request.threshold,
     )[0]
+
+
+@app.post("/llm/predict", response_model=Prediction)
+def predict_llm(request: PredictRequest) -> Prediction:
+    return predict_text_with_llm(
+        request.text,
+        model_name=request.model,
+        max_length=request.max_length,
+        threshold=request.threshold,
+    )
 
 
 @app.post("/predict/batch", response_model=list[Prediction])

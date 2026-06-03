@@ -27,6 +27,7 @@ dependencies = [
     "torch",
     "tqdm>=4.67.1",
     "transformers>=4.44",
+    "unsloth",
     "uvicorn[standard]>=0.30",
 ]
 
