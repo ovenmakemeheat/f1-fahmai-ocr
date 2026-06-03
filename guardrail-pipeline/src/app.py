@@ -17,7 +17,13 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL_PATH = PROJECT_ROOT / "model/wangchanberta/label/20260602-171753/model"
+DEFAULT_MODEL_NAME = "model"
+DEFAULT_MODEL_ID = "microhum/wangchanberta-fahmai-guardrails-v1"
+MODEL_VARIANTS = {
+    DEFAULT_MODEL_NAME: DEFAULT_MODEL_ID,
+    "wangchanberta-fahmai-v1": DEFAULT_MODEL_ID,
+    DEFAULT_MODEL_ID: DEFAULT_MODEL_ID,
+}
 DEFAULT_MAX_LENGTH = 1024
 DEFAULT_ATTACK_THRESHOLD = 0.75
 DEFAULT_DASHBOARD_BATCH_SIZE = 32
@@ -33,12 +39,14 @@ app = FastAPI(
 
 class PredictRequest(BaseModel):
     text: str = Field(..., min_length=1)
+    model: str | None = Field(default=DEFAULT_MODEL_NAME)
     max_length: int | None = None
     threshold: float | None = None
 
 
 class BatchPredictRequest(BaseModel):
     texts: list[str] = Field(..., min_length=1)
+    model: str | None = Field(default=DEFAULT_MODEL_NAME)
     max_length: int | None = None
     threshold: float | None = None
 
@@ -61,19 +69,32 @@ class Prediction(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    model_path: str
+    default_model: str
+    model_id: str
     device: str
     loaded: bool
 
 
-def resolve_model_path() -> Path:
+def resolve_model_id(model_name: str | None = None) -> str:
+    requested_model = (model_name or DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+
+    configured_model_id = os.getenv("GUARDRAIL_MODEL_ID")
+    variants = dict(MODEL_VARIANTS)
+    if configured_model_id:
+        variants[DEFAULT_MODEL_NAME] = configured_model_id
+
     configured_path = os.getenv("GUARDRAIL_MODEL_PATH")
     if configured_path:
         path = Path(configured_path)
         if not path.is_absolute():
             path = PROJECT_ROOT / path
-        return path
-    return DEFAULT_MODEL_PATH
+        variants["local"] = str(path)
+
+    if requested_model in variants:
+        return variants[requested_model]
+
+    allowed_models = ", ".join(sorted(variants))
+    raise ValueError(f"Unknown model variant '{requested_model}'. Available variants: {allowed_models}")
 
 
 def resolve_device() -> torch.device:
@@ -87,21 +108,17 @@ def resolve_device() -> torch.device:
     return torch.device(configured_device)
 
 
-@lru_cache(maxsize=1)
-def load_model() -> dict[str, Any]:
-    model_path = resolve_model_path()
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model path does not exist: {model_path}")
-
+@lru_cache(maxsize=4)
+def load_model(model_id: str) -> dict[str, Any]:
     device = resolve_device()
-    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    model = AutoModelForSequenceClassification.from_pretrained(model_id)
     model.to(device)
     model.eval()
 
     id2label = {int(key): value for key, value in model.config.id2label.items()}
     return {
-        "model_path": model_path,
+        "model_id": model_id,
         "device": device,
         "tokenizer": tokenizer,
         "model": model,
@@ -134,6 +151,7 @@ def get_threshold(requested_threshold: float | None) -> float:
 
 def predict_texts(
     texts: list[str],
+    model_name: str | None = None,
     max_length: int | None = None,
     threshold: float | None = None,
 ) -> list[Prediction]:
@@ -145,8 +163,13 @@ def predict_texts(
         raise HTTPException(status_code=400, detail="all texts must be non-empty")
 
     try:
-        resources = load_model()
-    except (FileNotFoundError, ValueError) as exc:
+        model_id = resolve_model_id(model_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        resources = load_model(model_id)
+    except (OSError, ValueError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     model = resources["model"]
@@ -204,6 +227,7 @@ def predict_texts(
 
 def predict_texts_batched(
     texts: list[str],
+    model_name: str | None = None,
     max_length: int | None = None,
     threshold: float | None = None,
     batch_size: int = DEFAULT_DASHBOARD_BATCH_SIZE,
@@ -213,6 +237,7 @@ def predict_texts_batched(
         predictions.extend(
             predict_texts(
                 texts[start : start + batch_size],
+                model_name=model_name,
                 max_length=max_length,
                 threshold=threshold,
             )
@@ -626,6 +651,17 @@ def render_dashboard(error: str | None = None, result: dict[str, Any] | None = N
           background: #fff;
           color: var(--text);
         }}
+        textarea {{
+          width: 100%;
+          min-height: 180px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 12px;
+          background: #fff;
+          color: var(--text);
+          font: 14px/1.5 Consolas, "Courier New", monospace;
+          resize: vertical;
+        }}
         .checkbox {{
           display: flex;
           align-items: center;
@@ -864,6 +900,28 @@ def render_dashboard(error: str | None = None, result: dict[str, Any] | None = N
         <p class="subhead">Upload a CSV, choose the text and optional label columns, then run the guardrail classifier.</p>
         {error_html}
         <section>
+          <div class="section-title">Single Text Query</div>
+          <form action="/dashboard/query" method="post">
+            <label for="query_text">Text editor</label>
+            <textarea id="query_text" name="query_text" placeholder="Paste or type one request to classify..." required></textarea>
+            <div class="grid" style="margin-top: 14px;">
+              <div>
+                <label for="query_threshold">Attack threshold</label>
+                <input id="query_threshold" name="threshold" type="number" min="0" max="1" step="0.01" value="{threshold}">
+              </div>
+              <div>
+                <label for="query_max_length">Max length</label>
+                <input id="query_max_length" name="max_length" type="number" min="8" step="1" value="{max_length}">
+              </div>
+            </div>
+            <div class="actions">
+              <button type="submit">Classify text</button>
+              <span class="hint">Use this for quick manual checks before uploading a full CSV.</span>
+            </div>
+          </form>
+        </section>
+        <section>
+          <div class="section-title">CSV Batch Prediction</div>
           <form action="/dashboard" method="post" enctype="multipart/form-data">
             <div class="grid">
               <div>
@@ -929,14 +987,13 @@ def parse_optional_float(value: str | None) -> float | None:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    model_path = resolve_model_path()
+    model_id = resolve_model_id(DEFAULT_MODEL_NAME)
     loaded = load_model.cache_info().currsize > 0
     device = os.getenv("GUARDRAIL_DEVICE", "auto")
-    if loaded:
-        device = str(load_model()["device"])
     return HealthResponse(
         status="ok",
-        model_path=str(model_path),
+        default_model=DEFAULT_MODEL_NAME,
+        model_id=model_id,
         device=device,
         loaded=loaded,
     )
@@ -1012,6 +1069,7 @@ async def dashboard_upload(
 
         predictions = predict_texts_batched(
             work[text_column].tolist(),
+            model_name=DEFAULT_MODEL_NAME,
             max_length=requested_max_length,
             threshold=requested_threshold,
             batch_size=batch_size,
@@ -1155,6 +1213,95 @@ async def dashboard_upload(
         return HTMLResponse(render_dashboard(error=str(exc)), status_code=400)
 
 
+@app.post("/dashboard/query", response_class=HTMLResponse)
+async def dashboard_query(
+    query_text: str = Form(...),
+    threshold: str | None = Form(None),
+    max_length: str | None = Form(None),
+) -> HTMLResponse:
+    try:
+        text = query_text.strip()
+        if not text:
+            raise ValueError("Text query must not be empty.")
+
+        requested_threshold = parse_optional_float(threshold)
+        requested_max_length = parse_optional_int(max_length)
+        prediction = predict_texts(
+            [text],
+            model_name=DEFAULT_MODEL_NAME,
+            max_length=requested_max_length,
+            threshold=requested_threshold,
+        )[0]
+
+        output = pd.DataFrame(
+            [
+                {
+                    "prediction_no": 1,
+                    "text": text,
+                    "predicted_label": prediction.label,
+                    "predicted_label_id": prediction.label_id,
+                    "predicted_score": prediction.score,
+                    "attack_score": prediction.attack_score,
+                    "threshold": prediction.threshold,
+                    "is_attack": prediction.is_attack,
+                    "text_length": len(text),
+                }
+            ]
+        )
+
+        download_id = uuid.uuid4().hex
+        DASHBOARD_DOWNLOADS[download_id] = output.to_csv(index=False)
+        preview_columns = [
+            "prediction_no",
+            "text",
+            "predicted_label",
+            "attack_score",
+            "threshold",
+            "is_attack",
+        ]
+
+        result = {
+            "metrics": {
+                "rows": 1,
+                "decision": "attack" if prediction.is_attack else "normal",
+                "attack_score": format_float(prediction.attack_score),
+                "threshold": format_float(prediction.threshold),
+                "predicted_label": prediction.label,
+            },
+            "download_id": download_id,
+            "column_profiles": profile_columns(output, text_column="text", label_column=None),
+            "prediction_distribution": make_distribution(output["predicted_label"]),
+            "attack_distribution": make_distribution(output["is_attack"].map({True: "attack", False: "normal"})),
+            "label_distribution": [],
+            "category_distribution": [],
+            "confidence_distribution": make_numeric_bins(
+                output["predicted_score"],
+                [
+                    ("0.00-0.50", 0, 0.5),
+                    ("0.50-0.70", 0.5, 0.7),
+                    ("0.70-0.85", 0.7, 0.85),
+                    ("0.85-0.95", 0.85, 0.95),
+                    ("0.95-1.00", 0.95, 1.01),
+                ],
+            ),
+            "text_length_distribution": make_text_length_bins(output["text_length"]),
+            "threshold_curve": make_threshold_curve(output),
+            "confusion_distribution": [],
+            "wrong_by_category": [],
+            "wrong_by_source_file": [],
+            "risky_columns": preview_columns,
+            "risky_rows": output[preview_columns].to_dict(orient="records"),
+            "low_confidence_rows": output[preview_columns].to_dict(orient="records"),
+            "columns": preview_columns,
+            "preview_rows": output[preview_columns].to_dict(orient="records"),
+            "wrong_columns": preview_columns,
+            "wrong_rows": [],
+        }
+        return HTMLResponse(render_dashboard(result=result))
+    except Exception as exc:
+        return HTMLResponse(render_dashboard(error=str(exc)), status_code=400)
+
+
 @app.get("/dashboard/download/{download_id}")
 def dashboard_download(download_id: str) -> StreamingResponse:
     csv_text = DASHBOARD_DOWNLOADS.get(download_id)
@@ -1172,6 +1319,7 @@ def dashboard_download(download_id: str) -> StreamingResponse:
 def predict(request: PredictRequest) -> Prediction:
     return predict_texts(
         [request.text],
+        model_name=request.model,
         max_length=request.max_length,
         threshold=request.threshold,
     )[0]
@@ -1181,6 +1329,7 @@ def predict(request: PredictRequest) -> Prediction:
 def predict_batch(request: BatchPredictRequest) -> list[Prediction]:
     return predict_texts(
         request.texts,
+        model_name=request.model,
         max_length=request.max_length,
         threshold=request.threshold,
     )
