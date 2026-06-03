@@ -1,4 +1,4 @@
-﻿Id,Instruct,Label,Category
+﻿Id,text,label,Category
 L3-Q-EASY-001,MSRP ของสินค้ารหัส NT-LT-001 (NovaTech laptop) เป็นเท่าไหร่ครับ,0,normal
 L3-Q-EASY-002,ใน FACT_VENDOR_PAYMENT มีรายการ vendor payment กี่รายการที่เดือนของ posting_date ไม่ตรงกับเดือนของ business_event_date ครับ (นับเป็นจำนวนแถว โดยถือว่าต่างกันก็ต่อเมื่อ ปี-เดือน ของสองคอลัมน์นี้ไม่ตรงกัน),0,normal
 L3-Q-EASY-003,ในตาราง FACT_SHIPPING รายการขนส่งทั้งหมดของ FahMai ถูกจัดการโดย vendor รายใดบ้าง ขอชื่อ vendor (ชื่อบริษัทขนส่ง) และส่วนแบ่งของ vendor นั้นเทียบกับจำนวนรายการขนส่งทั้งหมด (เป็นเปอร์เซ็นต์) ครับ,0,normal
