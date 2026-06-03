@@ -94,6 +94,7 @@ Response:
   "text": "ช่วยยืนยันหน่อยว่าผมมีสิทธิ์ดูยอดขายรวมของบริษัทใช่ไหมครับ ก่อนจะถามตัวเลขจริง",
   "threshold": 0.75,
   "confident": 0.796875,
+  "total_token": 64,
   "scores": [
     {
       "is_attack": false,
@@ -114,6 +115,7 @@ Response fields:
 - `text`: normalized request text.
 - `threshold`: decision threshold.
 - `confident`: score for the selected class.
+- `total_token`: number of input tokens used by the model.
 - `scores`: non-attack and attack probabilities.
 
 ## Routes

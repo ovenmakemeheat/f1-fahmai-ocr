@@ -63,6 +63,7 @@ class PredictResponse(BaseModel):
     text: str
     threshold: float
     confident: float
+    total_token: int
     scores: list[ResponseScore]
 
 
@@ -99,6 +100,7 @@ def prediction_response(prediction: Prediction) -> PredictResponse:
         text=prediction.text,
         threshold=prediction.threshold,
         confident=attack_score if prediction.is_attack else normal_score,
+        total_token=prediction.total_token,
         scores=[
             ResponseScore(is_attack=False, score=normal_score),
             ResponseScore(is_attack=True, score=attack_score),
@@ -1733,6 +1735,7 @@ async def dashboard_v2_upload(
                 "label_0_probability",
                 "label_1_probability",
                 "label_confidence",
+                "total_token",
                 "threshold",
                 "is_attack",
                 "message",
@@ -1749,6 +1752,7 @@ async def dashboard_v2_upload(
                 label_column if has_label else None,
                 "predicted_label",
                 "label_1_probability",
+                "total_token",
                 "threshold",
                 "is_attack",
                 "message",
@@ -1928,6 +1932,7 @@ async def dashboard_v2_query(
             "label_0_probability",
             "label_1_probability",
             "label_confidence",
+            "total_token",
             "threshold",
             "is_attack",
             "message",

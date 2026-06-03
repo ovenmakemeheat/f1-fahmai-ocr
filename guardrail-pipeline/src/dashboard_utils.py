@@ -33,6 +33,7 @@ def prediction_row(
         "threshold": prediction.threshold,
         "is_attack": prediction.is_attack,
         "message": prediction.message,
+        "total_token": prediction.total_token,
     }
 
 

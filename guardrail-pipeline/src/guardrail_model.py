@@ -40,6 +40,7 @@ class Prediction(BaseModel):
     threshold: float
     is_attack: bool
     message: str
+    total_token: int
     scores: list[Score]
 
 
@@ -219,7 +220,8 @@ def predict_texts(
         raise
 
     predictions: list[Prediction] = []
-    for text, row in zip(cleaned_texts, probabilities, strict=True):
+    input_lengths = encoded["attention_mask"].sum(dim=1).detach().cpu().tolist()
+    for text, row, total_token in zip(cleaned_texts, probabilities, input_lengths, strict=True):
         label_id = int(torch.argmax(row).item())
         label = str(id2label.get(label_id, label_id))
         score = float(row[label_id].item())
@@ -242,6 +244,7 @@ def predict_texts(
                 threshold=attack_threshold,
                 is_attack=attack_score >= attack_threshold,
                 message=INJECTION_MESSAGE if label_id == 1 else "",
+                total_token=int(total_token),
                 scores=scores,
             )
         )

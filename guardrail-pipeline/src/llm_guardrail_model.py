@@ -169,7 +169,7 @@ def score_label_probabilities(
     text: str,
     resources: dict[str, Any],
     max_length: int,
-) -> tuple[float, float]:
+) -> tuple[float, float, int]:
     tokenizer = resources["tokenizer"]
     model = resources["model"]
     device = resources["device"]
@@ -188,6 +188,7 @@ def score_label_probabilities(
         max_length=max_length,
         return_tensors="pt",
     )
+    total_token = int(encoded["attention_mask"].sum(dim=1).item())
     encoded = {key: value.to(device) for key, value in encoded.items()}
 
     try:
@@ -207,7 +208,7 @@ def score_label_probabilities(
         label_scores.append(torch.logsumexp(logits.index_select(0, token_ids), dim=0))
 
     probabilities = torch.softmax(torch.stack(label_scores), dim=0).detach().cpu()
-    return float(probabilities[0].item()), float(probabilities[1].item())
+    return float(probabilities[0].item()), float(probabilities[1].item()), total_token
 
 
 def predict_text_with_llm(
@@ -224,7 +225,7 @@ def predict_text_with_llm(
     attack_threshold = get_threshold(threshold)
     effective_max_length = get_llm_max_length(max_length)
 
-    normal_score, attack_score = score_label_probabilities(
+    normal_score, attack_score, total_token = score_label_probabilities(
         cleaned_text,
         resources=resources,
         max_length=effective_max_length,
@@ -242,6 +243,7 @@ def predict_text_with_llm(
         threshold=attack_threshold,
         is_attack=attack_score >= attack_threshold,
         message=INJECTION_MESSAGE if label_id == 1 else "",
+        total_token=total_token,
         scores=[
             Score(label="0", score=normal_score),
             Score(label="1", score=attack_score),
