@@ -4,11 +4,13 @@ import html
 import io
 import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.dashboard_utils import prediction_row, prediction_rows
@@ -26,12 +28,16 @@ from src.guardrail_model import (
 from src.llm_guardrail_model import predict_text_with_llm
 
 DASHBOARD_DOWNLOADS: dict[str, str] = {}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+STATIC_DIR = PROJECT_ROOT / "static"
 
 app = FastAPI(
     title="Guardrail Pipeline API",
     description="Serves the finetuned WangchanBERT guardrail classifier.",
     version="0.1.0",
 )
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class PredictRequest(BaseModel):
@@ -445,6 +451,13 @@ def render_dashboard(
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>{escape(title)}</title>
       <style>
+        @font-face {{
+          font-family: "LINE Seed Sans TH";
+          src: url("/static/fonts/LINESeedSansTH_Rg.ttf") format("truetype");
+          font-weight: 400;
+          font-style: normal;
+          font-display: swap;
+        }}
         :root {{
           color-scheme: light;
           --bg: #f6f7f9;
@@ -463,7 +476,7 @@ def render_dashboard(
           margin: 0;
           background: var(--bg);
           color: var(--text);
-          font-family: Arial, Helvetica, sans-serif;
+          font-family: "LINE Seed Sans TH", Tahoma, sans-serif;
         }}
         main {{
           max-width: 1180px;
@@ -516,7 +529,7 @@ def render_dashboard(
           padding: 12px;
           background: #fff;
           color: var(--text);
-          font: 14px/1.5 Consolas, "Courier New", monospace;
+          font: 14px/1.5 "LINE Seed Sans TH", Tahoma, sans-serif;
           resize: vertical;
         }}
         .checkbox {{
@@ -554,6 +567,181 @@ def render_dashboard(
         .hint {{
           color: var(--muted);
           font-size: 13px;
+        }}
+        .field-note {{
+          margin-top: 6px;
+          color: var(--muted);
+          font-size: 12px;
+        }}
+        .column-panel {{
+          display: none;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #f8fafc;
+          padding: 12px;
+          margin-top: 14px;
+        }}
+        .column-panel.active {{
+          display: block;
+        }}
+        .column-panel-head {{
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: center;
+          margin-bottom: 10px;
+        }}
+        .column-panel-title {{
+          font-size: 13px;
+          font-weight: 800;
+        }}
+        .column-panel-status {{
+          color: var(--muted);
+          font-size: 12px;
+        }}
+        .column-picker {{
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }}
+        .selected-column {{
+          min-height: 38px;
+          border: 1px dashed var(--border);
+          border-radius: 6px;
+          background: #f8fafc;
+          color: var(--muted);
+          display: flex;
+          align-items: center;
+          padding: 8px 10px;
+          font-size: 13px;
+          overflow-wrap: anywhere;
+        }}
+        .selected-column.filled {{
+          border-style: solid;
+          background: #fff;
+          color: var(--text);
+          font-weight: 800;
+        }}
+        .column-group {{
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          background: #fff;
+          padding: 3px;
+        }}
+        .column-name {{
+          color: #334155;
+          font-size: 12px;
+          font-weight: 800;
+          padding: 0 8px;
+          max-width: 220px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }}
+        .column-chip {{
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          background: #fff;
+          color: #334155;
+          min-height: 32px;
+          padding: 6px 10px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+        }}
+        .column-chip:hover {{
+          border-color: var(--accent);
+          color: var(--accent-dark);
+          background: #ecfdf5;
+        }}
+        .column-chip.selected-text {{
+          border-color: var(--accent);
+          background: #ccfbf1;
+          color: var(--accent-dark);
+        }}
+        .column-chip.selected-label {{
+          border-color: #0369a1;
+          background: #e0f2fe;
+          color: #075985;
+        }}
+        .submit-button {{
+          min-width: 132px;
+        }}
+        body.loading .submit-button {{
+          background: #64748b;
+        }}
+        body.loading .submit-button::after {{
+          content: "";
+          display: inline-block;
+          width: 12px;
+          height: 12px;
+          margin-left: 8px;
+          border: 2px solid rgba(255, 255, 255, 0.55);
+          border-top-color: #fff;
+          border-radius: 999px;
+          vertical-align: -2px;
+          animation: spin 0.8s linear infinite;
+        }}
+        @keyframes spin {{
+          to {{ transform: rotate(360deg); }}
+        }}
+        body.loading {{
+          cursor: progress;
+        }}
+        body.loading button, body.loading input, body.loading textarea {{
+          pointer-events: none;
+        }}
+        .loading-overlay {{
+          display: none;
+          position: fixed;
+          inset: 0;
+          z-index: 40;
+          background: rgba(15, 23, 42, 0.42);
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }}
+        body.loading .loading-overlay {{
+          display: flex;
+        }}
+        .loading-card {{
+          width: min(420px, 100%);
+          border-radius: 8px;
+          background: #fff;
+          border: 1px solid var(--border);
+          box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+          padding: 20px;
+        }}
+        .loading-title {{
+          font-weight: 900;
+          margin-bottom: 8px;
+        }}
+        .loading-text {{
+          color: var(--muted);
+          font-size: 13px;
+          line-height: 1.45;
+        }}
+        .loading-bar {{
+          height: 8px;
+          border-radius: 999px;
+          overflow: hidden;
+          background: #e2e8f0;
+          margin-top: 16px;
+        }}
+        .loading-bar::before {{
+          content: "";
+          display: block;
+          width: 38%;
+          height: 100%;
+          background: var(--accent);
+          animation: loadingSweep 1.1s ease-in-out infinite;
+        }}
+        @keyframes loadingSweep {{
+          0% {{ transform: translateX(-110%); }}
+          100% {{ transform: translateX(280%); }}
         }}
         .alert {{
           border-radius: 6px;
@@ -749,6 +937,138 @@ def render_dashboard(
             row.style.display = row.textContent.toLowerCase().includes("attack") ? "" : "none";
           }}
         }}
+        function parseCsvHeaderLine(line) {{
+          const columns = [];
+          let current = "";
+          let quoted = false;
+          for (let index = 0; index < line.length; index++) {{
+            const char = line[index];
+            const next = line[index + 1];
+            if (char === '"' && quoted && next === '"') {{
+              current += '"';
+              index++;
+            }} else if (char === '"') {{
+              quoted = !quoted;
+            }} else if (char === "," && !quoted) {{
+              columns.push(current.trim());
+              current = "";
+            }} else {{
+              current += char;
+            }}
+          }}
+          columns.push(current.trim());
+          return columns.filter(Boolean);
+        }}
+        function refreshColumnChipState() {{
+          const textColumn = document.getElementById("text_column")?.value;
+          const labelColumn = document.getElementById("label_column")?.value;
+          const textDisplay = document.getElementById("selectedTextColumn");
+          const labelDisplay = document.getElementById("selectedLabelColumn");
+          if (textDisplay) {{
+            textDisplay.textContent = textColumn || "Click Text on a detected column";
+            textDisplay.classList.toggle("filled", Boolean(textColumn));
+          }}
+          if (labelDisplay) {{
+            labelDisplay.textContent = labelColumn || "Optional: click Label on a 0/1 column";
+            labelDisplay.classList.toggle("filled", Boolean(labelColumn));
+          }}
+          for (const chip of document.querySelectorAll(".column-chip")) {{
+            chip.classList.toggle("selected-text", chip.dataset.role === "text" && chip.dataset.column === textColumn);
+            chip.classList.toggle("selected-label", chip.dataset.role === "label" && chip.dataset.column === labelColumn);
+          }}
+        }}
+        function chooseColumn(column, target) {{
+          const input = document.getElementById(target === "label" ? "label_column" : "text_column");
+          if (!input) return;
+          input.value = column;
+          refreshColumnChipState();
+        }}
+        function pickLikelyColumn(columns, candidates, fallback = "") {{
+          const lowerMap = new Map(columns.map((column) => [column.toLowerCase(), column]));
+          for (const candidate of candidates) {{
+            const matched = lowerMap.get(candidate.toLowerCase());
+            if (matched) return matched;
+          }}
+          return fallback;
+        }}
+        function renderColumnPicker(columns) {{
+          const panel = document.getElementById("columnPanel");
+          const picker = document.getElementById("columnPicker");
+          const status = document.getElementById("columnStatus");
+          if (!panel || !picker || !status) return;
+          if (!columns.length) {{
+            panel.classList.remove("active");
+            picker.innerHTML = "";
+            status.textContent = "";
+            return;
+          }}
+          panel.classList.add("active");
+          status.textContent = `${{columns.length}} columns detected`;
+          const textInput = document.getElementById("text_column");
+          const labelInput = document.getElementById("label_column");
+          if (textInput) textInput.value = pickLikelyColumn(columns, ["Instruct", "text", "prompt", "question"], columns[0] || "");
+          if (labelInput) labelInput.value = pickLikelyColumn(columns, ["Label", "label", "is_attack", "target"], "");
+          picker.replaceChildren();
+          for (const column of columns) {{
+            const group = document.createElement("span");
+            group.className = "column-group";
+            const name = document.createElement("span");
+            name.className = "column-name";
+            name.textContent = column;
+            name.title = column;
+            const textButton = document.createElement("button");
+            textButton.type = "button";
+            textButton.className = "column-chip";
+            textButton.dataset.column = column;
+            textButton.dataset.role = "text";
+            textButton.textContent = "Text";
+            textButton.addEventListener("click", () => chooseColumn(column, "text"));
+            const labelButton = document.createElement("button");
+            labelButton.type = "button";
+            labelButton.className = "column-chip";
+            labelButton.dataset.column = column;
+            labelButton.dataset.role = "label";
+            labelButton.textContent = "Label";
+            labelButton.addEventListener("click", () => chooseColumn(column, "label"));
+            group.append(name, textButton, labelButton);
+            picker.appendChild(group);
+          }}
+          refreshColumnChipState();
+        }}
+        function loadCsvColumns(input) {{
+          const file = input.files && input.files[0];
+          if (!file) {{
+            renderColumnPicker([]);
+            return;
+          }}
+          const reader = new FileReader();
+          reader.onload = () => {{
+            const firstLine = String(reader.result || "").split(/\r?\n/, 1)[0] || "";
+            renderColumnPicker(parseCsvHeaderLine(firstLine));
+          }};
+          reader.readAsText(file.slice(0, 16384));
+        }}
+        function startLoading(message) {{
+          const overlayText = document.getElementById("loadingText");
+          if (overlayText) overlayText.textContent = message;
+          document.body.classList.add("loading");
+          for (const button of document.querySelectorAll("button[type='submit']")) {{
+            button.setAttribute("aria-busy", "true");
+          }}
+        }}
+        window.addEventListener("DOMContentLoaded", () => {{
+          for (const inputId of ["text_column", "label_column"]) {{
+            const input = document.getElementById(inputId);
+            if (input) input.addEventListener("input", refreshColumnChipState);
+          }}
+          refreshColumnChipState();
+          for (const form of document.querySelectorAll("form")) {{
+            form.addEventListener("submit", () => {{
+              const isUpload = form.enctype === "multipart/form-data";
+              startLoading(isUpload ? "Processing CSV rows with the guardrail model..." : "Classifying the request...");
+            }});
+          }}
+        }});
       </script>
     </head>
     <body>
@@ -772,7 +1092,7 @@ def render_dashboard(
               </div>
             </div>
             <div class="actions">
-              <button type="submit">Classify text</button>
+              <button class="submit-button" type="submit">Classify text</button>
               <span class="hint">Use this for quick manual checks before uploading a full CSV.</span>
             </div>
           </form>
@@ -783,15 +1103,18 @@ def render_dashboard(
             <div class="grid">
               <div>
                 <label for="file">CSV file</label>
-                <input id="file" name="file" type="file" accept=".csv,text/csv" required>
+                <input id="file" name="file" type="file" accept=".csv,text/csv" onchange="loadCsvColumns(this)" required>
+                <div class="field-note">Choose a file, then click a detected column below.</div>
               </div>
               <div>
                 <label for="text_column">Text column</label>
-                <input id="text_column" name="text_column" type="text" value="text" required>
+                <input id="text_column" name="text_column" type="hidden" value="text">
+                <div id="selectedTextColumn" class="selected-column"></div>
               </div>
               <div>
                 <label for="label_column">Label column</label>
-                <input id="label_column" name="label_column" type="text" value="label">
+                <input id="label_column" name="label_column" type="hidden" value="">
+                <div id="selectedLabelColumn" class="selected-column"></div>
               </div>
               <div>
                 <label for="threshold">Attack threshold</label>
@@ -817,14 +1140,29 @@ def render_dashboard(
                 </label>
               </div>
             </div>
+            <div id="columnPanel" class="column-panel">
+              <div class="column-panel-head">
+                <div class="column-panel-title">Column Selection</div>
+                <div id="columnStatus" class="column-panel-status"></div>
+              </div>
+              <div id="columnPicker" class="column-picker"></div>
+              <div class="field-note">Use Text for the request body and Label for optional 0/1 validation.</div>
+            </div>
             <div class="actions">
-              <button type="submit">Run prediction</button>
+              <button class="submit-button" type="submit">Run prediction</button>
               <span class="hint">API endpoint: <strong>{escape(api_endpoint)}</strong>. Legacy files can use text column <strong>Instruct</strong> and label column <strong>Label</strong>.</span>
             </div>
           </form>
         </section>
         {result_html}
       </main>
+      <div class="loading-overlay" aria-live="polite" aria-busy="true">
+        <div class="loading-card">
+          <div class="loading-title">Running Guardrail</div>
+          <div id="loadingText" class="loading-text">Preparing request...</div>
+          <div class="loading-bar"></div>
+        </div>
+      </div>
     </body>
     </html>
     """
